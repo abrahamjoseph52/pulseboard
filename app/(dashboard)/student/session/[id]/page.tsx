@@ -3,7 +3,6 @@
 import {
   ArrowLeft,
   CheckCircle2,
-  Clock3,
   Radio,
   Sparkles,
   Users,
@@ -22,7 +21,6 @@ import {
 } from "next/navigation"
 
 import FeedbackForm from "@/app/components/student/FeedbackForm"
-import PulseTimer from "@/app/components/student/PulseTimer"
 import SessionStatus from "@/app/components/student/SessionStatus"
 import Card from "@/app/components/ui/Card"
 import Loading from "@/app/components/ui/Loading"
@@ -76,26 +74,24 @@ export default function StudentSessionPage() {
     )
 
   const [
-    loading,
-    setLoading,
+    sending,
+    setSending,
   ] = useState(false)
-
-  const [
-    sessionActive,
-    setSessionActive,
-  ] = useState(true)
 
   const [
     sendError,
     setSendError,
   ] = useState("")
 
+  /*
+   * The session is considered active directly from Firestore.
+   * There is no client-side countdown/timer anymore.
+   */
   const effectiveSessionActive =
     Boolean(
       session &&
         session.status ===
-          "active" &&
-        sessionActive
+          "active"
     )
 
   const handleSendSignal =
@@ -104,7 +100,7 @@ export default function StudentSessionPage() {
     ) => {
       if (
         !effectiveSessionActive ||
-        loading
+        sending
       ) {
         return
       }
@@ -128,7 +124,24 @@ export default function StudentSessionPage() {
         return
       }
 
-      setLoading(true)
+      /*
+       * IMPORTANT:
+       * useSession can return null, so use optional chaining.
+       */
+      const currentRound =
+        session?.currentRound ?? 0
+
+      if (
+        currentRound <= 0
+      ) {
+        setSendError(
+          "The current teaching pulse has not started yet."
+        )
+
+        return
+      }
+
+      setSending(true)
       setSendError("")
 
       try {
@@ -140,12 +153,17 @@ export default function StudentSessionPage() {
             currentUser.uid,
 
           signal,
+
+          round:
+            currentRound,
         })
 
         setSelectedSignal(
           signal
         )
-      } catch (error) {
+      } catch (
+        error
+      ) {
         console.error(
           "Failed to send student signal:",
           error
@@ -157,15 +175,8 @@ export default function StudentSessionPage() {
             : "Unable to send your feedback. Please try again."
         )
       } finally {
-        setLoading(false)
+        setSending(false)
       }
-    }
-
-  const handleTimerComplete =
-    () => {
-      setSessionActive(
-        false
-      )
     }
 
   const handleLeaveSession =
@@ -190,6 +201,13 @@ export default function StudentSessionPage() {
   const joinCode =
     session?.joinCode ||
     "------"
+
+  const currentRound =
+    session?.currentRound ?? 0
+
+  const roundTopic =
+    session?.roundTopic ||
+    ""
 
   const statusText =
     effectiveSessionActive
@@ -220,11 +238,29 @@ export default function StudentSessionPage() {
         return "This classroom session has ended."
       }
 
+      if (
+        session.roundStatus !==
+        "active"
+      ) {
+        return "Your classroom is ready. Wait for your lecturer to start the next teaching pulse."
+      }
+
+      if (roundTopic) {
+        return `Your lecturer is currently teaching “${roundTopic}”. Share how you are following the lesson.`
+      }
+
       return "Share how you are following the lesson. Your response helps your lecturer understand the classroom in real time."
     }, [
       session,
       sessionError,
+      roundTopic,
     ])
+
+  /*
+   * =========================================================
+   * LOADING
+   * =========================================================
+   */
 
   if (sessionLoading) {
     return (
@@ -236,6 +272,12 @@ export default function StudentSessionPage() {
       </main>
     )
   }
+
+  /*
+   * =========================================================
+   * SESSION ERROR
+   * =========================================================
+   */
 
   if (
     sessionError ||
@@ -282,9 +324,16 @@ export default function StudentSessionPage() {
     )
   }
 
+  /*
+   * =========================================================
+   * PAGE
+   * =========================================================
+   */
+
   return (
     <main className="app-shell min-h-screen">
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
+
         {/* =====================================================
             HEADER
         ===================================================== */}
@@ -363,12 +412,22 @@ export default function StudentSessionPage() {
 
                   {effectiveSessionActive
                     ? "Live classroom"
-                    : "Pulse complete"}
+                    : "Session complete"}
                 </span>
 
                 <span className="rounded-full border border-violet-400/10 bg-violet-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
                   {courseCode}
                 </span>
+
+                {currentRound >
+                  0 && (
+                  <span className="rounded-full border border-indigo-400/10 bg-indigo-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-indigo-300">
+                    Round{" "}
+                    {
+                      currentRound
+                    }
+                  </span>
+                )}
               </div>
 
               <h1 className="mt-5 max-w-4xl text-3xl font-black tracking-[-0.04em] sm:text-4xl lg:text-5xl">
@@ -419,9 +478,23 @@ export default function StudentSessionPage() {
 
                 <div className="absolute right-0 top-8 rounded-2xl border border-(--border) bg-(--surface)/90 px-3 py-2 shadow-(--shadow-md) backdrop-blur-xl">
                   <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                    <span
+                      className={[
+                        "h-2 w-2 rounded-full",
+                        effectiveSessionActive
+                          ? "animate-pulse bg-emerald-400"
+                          : "bg-(--foreground-subtle)",
+                      ].join(" ")}
+                    />
 
-                    <span className="text-[9px] font-black uppercase tracking-wider text-emerald-300">
+                    <span
+                      className={[
+                        "text-[9px] font-black uppercase tracking-wider",
+                        effectiveSessionActive
+                          ? "text-emerald-300"
+                          : "text-(--foreground-muted)",
+                      ].join(" ")}
+                    >
                       {effectiveSessionActive
                         ? "Respond now"
                         : "Completed"}
@@ -468,10 +541,47 @@ export default function StudentSessionPage() {
         </div>
 
         {/* =====================================================
+            CURRENT TOPIC
+        ===================================================== */}
+
+        {effectiveSessionActive &&
+          session.roundStatus ===
+            "active" &&
+          roundTopic && (
+            <section className="mt-5 overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-r from-violet-500/10 via-(--surface) to-indigo-500/5 p-5 sm:p-6">
+              <div className="flex items-center gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+
+                <div className="min-w-0">
+                  <p className="text-[9px] font-black uppercase tracking-[0.2em] text-violet-400">
+                    Current teaching topic
+                  </p>
+
+                  <h2 className="mt-1 truncate text-lg font-black sm:text-xl">
+                    {roundTopic}
+                  </h2>
+
+                  <p className="mt-1 text-xs text-(--foreground-muted)">
+                    Round {currentRound} is live. Submit your response below.
+                  </p>
+                </div>
+
+                <div className="ml-auto hidden items-center gap-2 rounded-full bg-emerald-400/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-wider text-emerald-300 sm:flex">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                  Live
+                </div>
+              </div>
+            </section>
+          )}
+
+        {/* =====================================================
             MAIN CONTENT
         ===================================================== */}
 
         <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_350px]">
+
           {/* Feedback */}
           <section className="surface overflow-hidden rounded-[2rem]">
             <div className="border-b border-(--border) bg-linear-to-r from-violet-500/[0.04] to-transparent p-5 sm:p-7">
@@ -504,17 +614,21 @@ export default function StudentSessionPage() {
             </div>
 
             <div className="p-5 sm:p-7">
-              {effectiveSessionActive ? (
+              {effectiveSessionActive &&
+              session.roundStatus ===
+                "active" ? (
                 <>
                   <FeedbackForm
                     onSend={
                       handleSendSignal
                     }
                     loading={
-                      loading
+                      sending
                     }
                     disabled={
-                      !effectiveSessionActive
+                      !effectiveSessionActive ||
+                      currentRound <=
+                        0
                     }
                     selectedSignal={
                       selectedSignal
@@ -540,7 +654,7 @@ export default function StudentSessionPage() {
                   )}
 
                   {selectedSignal &&
-                    !loading && (
+                    !sending && (
                       <div className="relative mt-5 overflow-hidden rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.045] p-4">
                         <div
                           aria-hidden="true"
@@ -574,6 +688,12 @@ export default function StudentSessionPage() {
                   onBack={
                     handleLeaveSession
                   }
+                  message={
+                    session.status !==
+                    "active"
+                      ? "This classroom session has ended."
+                      : "The lecturer has not started a teaching pulse yet."
+                  }
                 />
               )}
             </div>
@@ -581,7 +701,8 @@ export default function StudentSessionPage() {
 
           {/* Sidebar */}
           <aside className="space-y-5">
-            {/* Timer */}
+
+            {/* Current classroom state */}
             <Card
               padding="none"
               glow={
@@ -592,16 +713,16 @@ export default function StudentSessionPage() {
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
-                      <Clock3 className="h-5 w-5" />
+                      <Radio className="h-5 w-5" />
                     </div>
 
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-400">
-                        Pulse timer
+                        Classroom state
                       </p>
 
                       <p className="mt-1 text-xs font-bold text-(--foreground-secondary)">
-                        Current feedback round
+                        Live faculty control
                       </p>
                     </div>
                   </div>
@@ -620,16 +741,30 @@ export default function StudentSessionPage() {
                   </span>
                 </div>
 
-                <div className="mt-5">
-                  <PulseTimer
-                    seconds={60}
-                    running={
-                      effectiveSessionActive
-                    }
-                    onComplete={
-                      handleTimerComplete
-                    }
-                  />
+                <div className="mt-5 rounded-2xl border border-(--border) bg-(--background-soft) p-4">
+                  <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
+                    Current topic
+                  </p>
+
+                  <p className="mt-2 text-sm font-black">
+                    {roundTopic ||
+                      "Waiting for topic"}
+                  </p>
+
+                  {currentRound >
+                    0 && (
+                    <p className="mt-1 text-[10px] text-(--foreground-muted)">
+                      Round{" "}
+                      {
+                        currentRound
+                      }
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-3 flex items-center gap-2 text-[10px] text-(--foreground-subtle)">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  No countdown — your lecturer controls the pulse.
                 </div>
               </div>
             </Card>
@@ -746,7 +881,10 @@ export default function StudentSessionPage() {
             label="Feedback"
             value={
               effectiveSessionActive
-                ? "Open"
+                ? session.roundStatus ===
+                    "active"
+                  ? "Open"
+                  : "Waiting"
                 : "Closed"
             }
             tone="emerald"
@@ -780,12 +918,15 @@ function SessionChip({
 function PulseComplete({
   selectedSignal,
   onBack,
+  message,
 }: {
   selectedSignal:
     | SignalType
     | null
 
   onBack: () => void
+
+  message: string
 }) {
   return (
     <div className="relative flex min-h-[420px] flex-col items-center justify-center overflow-hidden px-4 py-8 text-center">
@@ -804,16 +945,17 @@ function PulseComplete({
       </div>
 
       <p className="mt-6 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">
-        Feedback complete
+        Classroom update
       </p>
 
       <h2 className="mt-2 text-2xl font-black">
-        Pulse received
+        {selectedSignal
+          ? "Pulse received"
+          : "Waiting for the next pulse"}
       </h2>
 
       <p className="mt-3 max-w-md text-sm leading-7 text-(--foreground-muted)">
-        This feedback round has ended. Thanks for sharing how you
-        followed the lesson.
+        {message}
       </p>
 
       {selectedSignal && (

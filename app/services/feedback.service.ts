@@ -9,6 +9,7 @@ import {
 } from "firebase/firestore"
 
 import { db } from "@/lib/firebase"
+
 import type {
   Signal,
   SignalType,
@@ -21,10 +22,19 @@ export type SendSignalData = {
   sessionId: string
   studentId: string
   signal: SignalType
+
+  /*
+   * The teaching pulse that this response belongs to.
+   */
+  round: number
 }
 
-export type SignalCounts =
-  Record<SignalType, number>
+export type SignalCounts = {
+  got_it: number
+  slightly_lost: number
+  confused: number
+  interesting: number
+}
 
 export const EMPTY_SIGNAL_COUNTS: SignalCounts = {
   got_it: 0,
@@ -66,6 +76,15 @@ export async function sendSignal(
     )
   }
 
+  if (
+    !Number.isInteger(data.round) ||
+    data.round <= 0
+  ) {
+    throw new Error(
+      "A valid teaching round is required."
+    )
+  }
+
   const signalRef =
     await addDoc(
       signalsCollection,
@@ -73,6 +92,13 @@ export async function sendSignal(
         sessionId,
         studentId,
         signal: data.signal,
+
+        /*
+         * NEW:
+         * Store the exact teaching pulse.
+         */
+        round: data.round,
+
         timestamp:
           serverTimestamp(),
       }
@@ -106,11 +132,13 @@ export function subscribeToSessionSignals(
   const signalsQuery =
     query(
       signalsCollection,
+
       where(
         "sessionId",
         "==",
         cleanSessionId
       ),
+
       orderBy(
         "timestamp",
         "desc"
@@ -124,19 +152,48 @@ export function subscribeToSessionSignals(
         snapshot.docs.map(
           (
             signalDocument
-          ) => ({
-            id:
-              signalDocument.id,
-            ...(
-              signalDocument.data() as Omit<
-                Signal,
-                "id"
-              >
-            ),
-          })
+          ) => {
+            const data =
+              signalDocument.data()
+
+            return {
+              id:
+                signalDocument.id,
+
+              sessionId:
+                typeof data.sessionId ===
+                "string"
+                  ? data.sessionId
+                  : cleanSessionId,
+
+              studentId:
+                typeof data.studentId ===
+                "string"
+                  ? data.studentId
+                  : "",
+
+              signal:
+                data.signal as SignalType,
+
+              /*
+               * Backward compatibility:
+               * old signals without a round become 0.
+               */
+              round:
+                typeof data.round ===
+                "number"
+                  ? data.round
+                  : 0,
+
+              timestamp:
+                data.timestamp,
+            }
+          }
         )
 
-      callback(signals)
+      callback(
+        signals
+      )
     },
     (snapshotError) => {
       console.error(
@@ -168,19 +225,23 @@ export function subscribeToSignalCounts(
       }
 
       signals.forEach(
-        (item) => {
+        (signal) => {
           if (
             Object.prototype.hasOwnProperty.call(
               counts,
-              item.signal
+              signal.signal
             )
           ) {
-            counts[item.signal] += 1
+            counts[
+              signal.signal
+            ] += 1
           }
         }
       )
 
-      callback(counts)
+      callback(
+        counts
+      )
     },
     onError
   )
@@ -189,12 +250,11 @@ export function subscribeToSignalCounts(
 export function getTotalSignalCount(
   counts: SignalCounts
 ): number {
-  return Object.values(
-    counts
-  ).reduce(
-    (total, count) =>
-      total + count,
-    0
+  return (
+    counts.got_it +
+    counts.slightly_lost +
+    counts.confused +
+    counts.interesting
   )
 }
 
@@ -204,7 +264,9 @@ export function getUniqueStudentCount(
   return new Set(
     signals
       .map(
-        (signal) =>
+        (
+          signal
+        ) =>
           signal.studentId
       )
       .filter(Boolean)

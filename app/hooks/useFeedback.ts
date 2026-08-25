@@ -1,110 +1,147 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import {
+  useCallback,
+  useState,
+} from "react"
 
-import type { Signal, SignalType } from "@/lib/types"
+import type {
+  SignalType,
+} from "@/lib/types"
 
 import {
   sendSignal,
-  subscribeToSessionSignals,
 } from "@/app/services/feedback.service"
 
-type SignalCounts = Record<SignalType, number>
+type UseFeedbackOptions = {
+  sessionId: string
+  studentId: string
+  currentRound: number
+}
 
 type UseFeedbackReturn = {
-  signals: Signal[]
-  counts: SignalCounts
+  selectedSignal:
+    | SignalType
+    | null
+
   loading: boolean
-  error: string | null
+
+  error: string
+
   sendFeedback: (
-    studentId: string,
     signal: SignalType
   ) => Promise<void>
+
+  clearError: () => void
 }
 
-const emptyCounts: SignalCounts = {
-  got_it: 0,
-  slightly_lost: 0,
-  confused: 0,
-  interesting: 0,
-}
-
-export function useFeedback(
-  sessionId: string | undefined
-): UseFeedbackReturn {
-  const [signals, setSignals] = useState<Signal[]>([])
-  const [counts, setCounts] =
-    useState<SignalCounts>(emptyCounts)
-  const [loading, setLoading] = useState(Boolean(sessionId))
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!sessionId) {
-      return
-    }
-
-    const unsubscribe = subscribeToSessionSignals(
-      sessionId,
-      (updatedSignals) => {
-        const updatedCounts: SignalCounts = {
-          got_it: 0,
-          slightly_lost: 0,
-          confused: 0,
-          interesting: 0,
-        }
-
-        updatedSignals.forEach((item) => {
-          updatedCounts[item.signal] += 1
-        })
-
-        setSignals(updatedSignals)
-        setCounts(updatedCounts)
-        setError(null)
-        setLoading(false)
-      }
+export function useFeedback({
+  sessionId,
+  studentId,
+  currentRound,
+}: UseFeedbackOptions): UseFeedbackReturn {
+  const [
+    selectedSignal,
+    setSelectedSignal,
+  ] =
+    useState<SignalType | null>(
+      null
     )
 
-    return unsubscribe
-  }, [sessionId])
+  const [
+    loading,
+    setLoading,
+  ] = useState(false)
 
-  const sendFeedback = async (
-    studentId: string,
-    signal: SignalType
-  ) => {
-    if (!sessionId) {
-      throw new Error("Session ID is missing.")
-    }
+  const [
+    error,
+    setError,
+  ] = useState("")
 
-    try {
-      setError(null)
+  const sendFeedback =
+    useCallback(
+      async (
+        signal: SignalType
+      ) => {
+        if (loading) {
+          return
+        }
 
-      await sendSignal({
+        if (!sessionId) {
+          setError(
+            "Session ID is required."
+          )
+          return
+        }
+
+        if (!studentId) {
+          setError(
+            "Student ID is required."
+          )
+          return
+        }
+
+        if (
+          !Number.isInteger(
+            currentRound
+          ) ||
+          currentRound <= 0
+        ) {
+          setError(
+            "The current teaching pulse has not started yet."
+          )
+          return
+        }
+
+        setLoading(true)
+        setError("")
+
+        try {
+          await sendSignal({
+            sessionId,
+            studentId,
+            signal,
+            round: currentRound,
+          })
+
+          setSelectedSignal(
+            signal
+          )
+        } catch (
+          sendError
+        ) {
+          console.error(
+            "Failed to send feedback:",
+            sendError
+          )
+
+          setError(
+            sendError instanceof Error
+              ? sendError.message
+              : "Unable to send your feedback. Please try again."
+          )
+        } finally {
+          setLoading(false)
+        }
+      },
+      [
         sessionId,
         studentId,
-        signal,
-      })
-    } catch (sendError) {
-      console.error(
-        "Failed to send feedback:",
-        sendError
-      )
+        currentRound,
+        loading,
+      ]
+    )
 
-      const message =
-        sendError instanceof Error
-          ? sendError.message
-          : "Unable to send feedback."
-
-      setError(message)
-
-      throw sendError
-    }
-  }
+  const clearError =
+    useCallback(() => {
+      setError("")
+    }, [])
 
   return {
-    signals,
-    counts,
+    selectedSignal,
     loading,
     error,
     sendFeedback,
+    clearError,
   }
 }

@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  CheckCircle2,
   HelpCircle,
   Lightbulb,
   Radio,
@@ -11,7 +12,6 @@ import {
   Users,
   XCircle,
   Zap,
-  Clock3,
 } from "lucide-react"
 
 import {
@@ -68,19 +68,13 @@ type RoundStatus =
   | "active"
   | "completed"
 
-type RoundDuration =
-  | 30
-  | 60
-  | 120
-  | 180
-
 type FirestoreSessionData =
   Omit<Session, "id"> & {
     totalSignals?: unknown
     aiSummary?: unknown
+
     roundStatus?: unknown
     currentRound?: unknown
-    roundDurationSeconds?: unknown
     roundTopic?: unknown
     roundStartedAt?: unknown
     roundEndedAt?: unknown
@@ -92,15 +86,19 @@ type SessionView = {
   courseCode: string
   joinCode: string
   status: Session["status"]
+
   participantCount: number
   totalSignals: number
+
   aiSummary: unknown
+
   roundStatus: RoundStatus
   currentRound: number
-  roundDurationSeconds: number
   roundTopic: string
+
   roundStartedAt: unknown
   roundEndedAt: unknown
+
   raw: FirestoreSessionData
 }
 
@@ -109,15 +107,6 @@ type LiveSignalStats = {
   total: number
   uniqueStudents: number
 }
-
-const DEFAULT_ROUND_DURATION: RoundDuration = 120
-
-const ROUND_DURATIONS: RoundDuration[] = [
-  30,
-  60,
-  120,
-  180,
-]
 
 const SIGNAL_META: Record<
   SignalType,
@@ -132,7 +121,9 @@ const SIGNAL_META: Record<
 > = {
   got_it: {
     label: "Got it",
-    icon: <Check className="h-5 w-5" />,
+    icon: (
+      <Check className="h-5 w-5" />
+    ),
     tone:
       "border-emerald-400/15 bg-emerald-500/[0.055]",
     iconTone:
@@ -145,7 +136,9 @@ const SIGNAL_META: Record<
 
   slightly_lost: {
     label: "Slightly lost",
-    icon: <Lightbulb className="h-5 w-5" />,
+    icon: (
+      <Lightbulb className="h-5 w-5" />
+    ),
     tone:
       "border-amber-400/15 bg-amber-500/[0.055]",
     iconTone:
@@ -158,7 +151,9 @@ const SIGNAL_META: Record<
 
   confused: {
     label: "Confused",
-    icon: <HelpCircle className="h-5 w-5" />,
+    icon: (
+      <HelpCircle className="h-5 w-5" />
+    ),
     tone:
       "border-rose-400/15 bg-rose-500/[0.055]",
     iconTone:
@@ -171,7 +166,9 @@ const SIGNAL_META: Record<
 
   interesting: {
     label: "Interesting",
-    icon: <Sparkles className="h-5 w-5" />,
+    icon: (
+      <Sparkles className="h-5 w-5" />
+    ),
     tone:
       "border-violet-400/15 bg-violet-500/[0.055]",
     iconTone:
@@ -282,70 +279,6 @@ function toText(
   return ""
 }
 
-function getTimestampMillis(
-  value: unknown
-): number {
-  if (
-    value &&
-    typeof value === "object"
-  ) {
-    const timestamp =
-      value as {
-        toMillis?: () => number
-      }
-
-    if (
-      typeof timestamp.toMillis ===
-      "function"
-    ) {
-      return timestamp.toMillis()
-    }
-  }
-
-  if (
-    typeof value === "number"
-  ) {
-    return value
-  }
-
-  if (
-    typeof value === "string"
-  ) {
-    const parsed =
-      new Date(value).getTime()
-
-    return Number.isFinite(parsed)
-      ? parsed
-      : 0
-  }
-
-  return 0
-}
-
-function formatTime(
-  totalSeconds: number
-): string {
-  const safeSeconds =
-    Math.max(
-      0,
-      Math.floor(totalSeconds)
-    )
-
-  const minutes =
-    Math.floor(
-      safeSeconds / 60
-    )
-
-  const seconds =
-    safeSeconds % 60
-
-  return `${minutes
-    .toString()
-    .padStart(2, "0")}:${seconds
-    .toString()
-    .padStart(2, "0")}`
-}
-
 function createSnapshot(
   round: number,
   topic: string,
@@ -374,56 +307,62 @@ export default function AdminSessionPage() {
       ? params.id
       : ""
 
-  const [session, setSession] =
-    useState<SessionView | null>(
-      null
-    )
+  const [
+    session,
+    setSession,
+  ] = useState<SessionView | null>(
+    null
+  )
 
-  const [loading, setLoading] =
-    useState(Boolean(sessionId))
+  const [
+    loading,
+    setLoading,
+  ] = useState(
+    Boolean(sessionId)
+  )
 
-  const [error, setError] =
-    useState<string | null>(
-      sessionId
-        ? null
-        : "Session ID is missing."
-    )
+  const [
+    error,
+    setError,
+  ] = useState<string | null>(
+    sessionId
+      ? null
+      : "Session ID is missing."
+  )
 
-  const [ending, setEnding] =
-    useState(false)
+  const [
+    ending,
+    setEnding,
+  ] = useState(false)
 
   const [
     startingPulse,
     setStartingPulse,
   ] = useState(false)
 
-  const [endingPulse, setEndingPulse] =
-    useState(false)
-
-  const [topic, setTopic] =
-    useState("")
+  const [
+    endingPulse,
+    setEndingPulse,
+  ] = useState(false)
 
   const [
-    selectedDuration,
-    setSelectedDuration,
-  ] = useState<RoundDuration>(
-    DEFAULT_ROUND_DURATION
+    topic,
+    setTopic,
+  ] = useState("")
+
+  const [
+    liveStats,
+    setLiveStats,
+  ] = useState<LiveSignalStats>(
+    createInitialLiveStats
   )
 
   const [
-    roundSecondsLeft,
-    setRoundSecondsLeft,
-  ] = useState(0)
-
-  const [liveStats, setLiveStats] =
-    useState<LiveSignalStats>(
-      createInitialLiveStats
-    )
-
-  const [roundCounts, setRoundCounts] =
-    useState<SignalCounts>(
-      createEmptyCounts
-    )
+    roundCounts,
+    setRoundCounts,
+  ] = useState<SignalCounts>(
+    createEmptyCounts
+  )
 
   const [
     roundSnapshots,
@@ -448,27 +387,28 @@ export default function AdminSessionPage() {
   const roundSnapshotsRef =
     useRef<Snapshot[]>([])
 
-  const seenSignalIdsRef =
-    useRef<Set<string>>(
-      new Set()
-    )
-
-  const signalsInitializedRef =
-    useRef(false)
-
   const finishingPulseRef =
     useRef(false)
 
   const loadedSnapshotsRef =
     useRef(false)
 
+  /*
+   * Keep current session available to
+   * Firestore listeners without causing
+   * subscription recreation.
+   */
   useEffect(() => {
-    sessionRef.current = session
+    sessionRef.current =
+      session
   }, [session])
 
   /*
-   * Load session
+   * =========================================================
+   * LOAD SESSION
+   * =========================================================
    */
+
   useEffect(() => {
     if (!sessionId) {
       return
@@ -499,7 +439,8 @@ export default function AdminSessionPage() {
 
           const nextSession:
             SessionView = {
-            id: snapshot.id,
+            id:
+              snapshot.id,
 
             title:
               typeof raw.title ===
@@ -519,7 +460,8 @@ export default function AdminSessionPage() {
                 ? raw.joinCode
                 : "",
 
-            status: raw.status,
+            status:
+              raw.status,
 
             participantCount:
               toNumber(
@@ -548,12 +490,6 @@ export default function AdminSessionPage() {
                 raw.currentRound
               ),
 
-            roundDurationSeconds:
-              toNumber(
-                raw.roundDurationSeconds
-              ) ||
-              DEFAULT_ROUND_DURATION,
-
             roundTopic:
               typeof raw.roundTopic ===
               "string"
@@ -575,13 +511,6 @@ export default function AdminSessionPage() {
 
           setError(null)
           setLoading(false)
-
-          if (
-            nextSession.roundStatus !==
-            "active"
-          ) {
-            setRoundSecondsLeft(0)
-          }
         },
         (snapshotError) => {
           console.error(
@@ -601,8 +530,11 @@ export default function AdminSessionPage() {
   }, [sessionId])
 
   /*
-   * Load saved snapshots once
+   * =========================================================
+   * LOAD SAVED SNAPSHOTS
+   * =========================================================
    */
+
   useEffect(() => {
     if (
       !sessionId ||
@@ -633,7 +565,9 @@ export default function AdminSessionPage() {
           const snapshots =
             snapshot.docs
               .map(
-                (snapshotDoc) => {
+                (
+                  snapshotDoc
+                ) => {
                   const data =
                     snapshotDoc.data()
 
@@ -687,7 +621,8 @@ export default function AdminSessionPage() {
                   a,
                   b
                 ) =>
-                  a.round - b.round
+                  a.round -
+                  b.round
               )
 
           roundSnapshotsRef.current =
@@ -696,7 +631,9 @@ export default function AdminSessionPage() {
           setRoundSnapshots(
             snapshots
           )
-        } catch (snapshotError) {
+        } catch (
+          snapshotError
+        ) {
           console.error(
             "Failed to load round snapshots:",
             snapshotError
@@ -708,8 +645,18 @@ export default function AdminSessionPage() {
   }, [sessionId])
 
   /*
-   * Live signals
+   * =========================================================
+   * LIVE FIRESTORE SIGNALS
+   * =========================================================
+   *
+   * Every Firestore update recalculates:
+   *
+   * 1. all-session totals
+   * 2. current-round totals
+   *
+   * No "new signal ID" tracking.
    */
+
   useEffect(() => {
     if (!sessionId) {
       return
@@ -718,40 +665,114 @@ export default function AdminSessionPage() {
     const unsubscribe =
       subscribeToSessionSignals(
         sessionId,
-        (signals: Signal[]) => {
-          const counts =
+        (
+          signals: Signal[]
+        ) => {
+          const currentSession =
+            sessionRef.current
+
+          /*
+           * -----------------------------------------
+           * ALL SESSION SIGNALS
+           * -----------------------------------------
+           */
+
+          const allCounts =
             createEmptyCounts()
 
           signals.forEach(
-            (signal) => {
+            (
+              signal
+            ) => {
               if (
                 Object.prototype.hasOwnProperty.call(
-                  counts,
+                  allCounts,
                   signal.signal
                 )
               ) {
-                counts[
+                allCounts[
                   signal.signal
                 ] += 1
               }
             }
           )
 
-          const total =
+          const totalSignals =
             getTotalSignalCount(
-              counts
+              allCounts
             )
 
-          const uniqueStudents =
+          const totalStudents =
             getUniqueStudentCount(
               signals
             )
 
-          const nextStats: LiveSignalStats =
+          /*
+           * -----------------------------------------
+           * CURRENT ROUND SIGNALS
+           * -----------------------------------------
+           */
+
+          const currentRound =
+            currentSession
+              ?.currentRound ??
+            0
+
+          const currentRoundSignals =
+            currentSession?.roundStatus ===
+              "active" &&
+            currentRound > 0
+              ? signals.filter(
+                  (
+                    signal
+                  ) =>
+                    signal.round ===
+                    currentRound
+                )
+              : []
+
+          const currentRoundCounts =
+            createEmptyCounts()
+
+          currentRoundSignals.forEach(
+            (
+              signal
+            ) => {
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  currentRoundCounts,
+                  signal.signal
+                )
+              ) {
+                currentRoundCounts[
+                  signal.signal
+                ] += 1
+              }
+            }
+          )
+
+          const currentRoundStudents =
+            getUniqueStudentCount(
+              currentRoundSignals
+            )
+
+          /*
+           * -----------------------------------------
+           * UPDATE UI STATE
+           * -----------------------------------------
+           */
+
+          const nextStats:
+            LiveSignalStats =
             {
-              counts,
-              total,
-              uniqueStudents,
+              counts:
+                allCounts,
+
+              total:
+                totalSignals,
+
+              uniqueStudents:
+                totalStudents,
             }
 
           liveStatsRef.current =
@@ -762,111 +783,91 @@ export default function AdminSessionPage() {
           )
 
           if (
-            !signalsInitializedRef.current
-          ) {
-            signals.forEach(
-              (signal) => {
-                if (signal.id) {
-                  seenSignalIdsRef.current.add(
-                    signal.id
-                  )
-                }
-              }
-            )
-
-            signalsInitializedRef.current =
-              true
-
-            return
-          }
-
-          const newSignals =
-            signals.filter(
-              (signal) => {
-                if (!signal.id) {
-                  return false
-                }
-
-                return !seenSignalIdsRef.current.has(
-                  signal.id
-                )
-              }
-            )
-
-          if (
-            newSignals.length === 0
-          ) {
-            return
-          }
-
-          newSignals.forEach(
-            (signal) => {
-              if (signal.id) {
-                seenSignalIdsRef.current.add(
-                  signal.id
-                )
-              }
-            }
-          )
-
-          if (
-            sessionRef.current
-              ?.roundStatus !==
+            currentSession?.roundStatus ===
             "active"
           ) {
-            return
+            roundCountsRef.current =
+              currentRoundCounts
+
+            setRoundCounts(
+              currentRoundCounts
+            )
+          } else {
+            const emptyCounts =
+              createEmptyCounts()
+
+            roundCountsRef.current =
+              emptyCounts
+
+            setRoundCounts(
+              emptyCounts
+            )
           }
 
-          const nextRoundCounts =
-            {
-              ...roundCountsRef.current,
-            }
+          /*
+           * -----------------------------------------
+           * KEEP SESSION AGGREGATES IN FIRESTORE
+           * -----------------------------------------
+           *
+           * participantCount = unique students
+           * across entire session.
+           */
 
-          newSignals.forEach(
-            (signal) => {
-              if (
-                Object.prototype.hasOwnProperty.call(
-                  nextRoundCounts,
-                  signal.signal
-                )
-              ) {
-                nextRoundCounts[
-                  signal.signal
-                ] += 1
+          if (
+            currentSession
+          ) {
+            void updateDoc(
+              doc(
+                db,
+                "sessions",
+                sessionId
+              ),
+              {
+                participantCount:
+                  totalStudents,
+
+                totalSignals:
+                  totalSignals,
               }
-            }
-          )
-
-          roundCountsRef.current =
-            nextRoundCounts
-
-          setRoundCounts(
-            nextRoundCounts
-          )
-
-          void updateDoc(
-            doc(
-              db,
-              "sessions",
-              sessionId
-            ),
-            {
-              participantCount:
-                uniqueStudents,
-
-              totalSignals:
-                total,
-            }
-          ).catch(
-            (updateError) => {
-              console.error(
-                "Failed to update session aggregates:",
+            ).catch(
+              (
                 updateError
-              )
+              ) => {
+                console.error(
+                  "Failed to update session aggregates:",
+                  updateError
+                )
+              }
+            )
+          }
+
+          /*
+           * Logging during development.
+           * Useful for confirming live data.
+           */
+          console.debug(
+            "PulseBoard live signals:",
+            {
+              allSignals:
+                totalSignals,
+
+              allStudents:
+                totalStudents,
+
+              currentRound,
+
+              currentRoundSignals:
+                currentRoundSignals.length,
+
+              currentRoundStudents,
+
+              currentRoundCounts,
             }
           )
         },
-        (signalError) => {
+        (
+          signalError
+        ) => {
           console.error(
             "Signal subscription failed:",
             signalError
@@ -882,8 +883,11 @@ export default function AdminSessionPage() {
   }, [sessionId])
 
   /*
-   * Save current round
+   * =========================================================
+   * SAVE CURRENT ROUND SNAPSHOT
+   * =========================================================
    */
+
   const persistRoundSnapshot =
     useCallback(
       async (
@@ -930,28 +934,52 @@ export default function AdminSessionPage() {
 
         const alreadySaved =
           roundSnapshotsRef.current.some(
-            (snapshot) =>
+            (
+              snapshot
+            ) =>
               snapshot.round ===
               currentSession.currentRound
           )
 
-        if (alreadySaved) {
+        if (
+          alreadySaved
+        ) {
           return (
             roundSnapshotsRef.current.find(
-              (snapshot) =>
+              (
+                snapshot
+              ) =>
                 snapshot.round ===
                 currentSession.currentRound
             ) ?? null
           )
         }
 
+        /*
+         * Use current-round students first.
+         * Fall back to session-level students.
+         */
+        const currentRoundStudents =
+          getUniqueStudentCountFromRound(
+            currentSession.currentRound,
+            currentSession
+          )
+
+        const totalStudents =
+          currentRoundStudents ??
+          Math.max(
+            liveStatsRef.current
+              .uniqueStudents,
+            currentSession
+              .participantCount
+          )
+
         const snapshot =
           createSnapshot(
             currentSession.currentRound,
             currentTopic,
             counts,
-            liveStatsRef.current
-              .uniqueStudents
+            totalStudents
           )
 
         await addDoc(
@@ -987,8 +1015,11 @@ export default function AdminSessionPage() {
     )
 
   /*
-   * Start pulse
+   * =========================================================
+   * START PULSE
+   * =========================================================
    */
+
   const handleStartPulse =
     useCallback(
       async () => {
@@ -1013,6 +1044,7 @@ export default function AdminSessionPage() {
           setError(
             "Enter a teaching topic before starting the pulse."
           )
+
           return
         }
 
@@ -1022,12 +1054,20 @@ export default function AdminSessionPage() {
           setError(
             "Topic must be 120 characters or less."
           )
+
           return
         }
 
         try {
-          setStartingPulse(true)
+          setStartingPulse(
+            true
+          )
+
           setError(null)
+
+          /*
+           * Fresh counter for the next round.
+           */
 
           const emptyCounts =
             createEmptyCounts()
@@ -1056,9 +1096,6 @@ export default function AdminSessionPage() {
               currentRound:
                 nextRound,
 
-              roundDurationSeconds:
-                selectedDuration,
-
               roundTopic:
                 cleanTopic,
 
@@ -1070,8 +1107,15 @@ export default function AdminSessionPage() {
             }
           )
 
+          /*
+           * Topic is now stored in Firestore,
+           * so it remains visible after refresh.
+           */
+
           setTopic("")
-        } catch (startError) {
+        } catch (
+          startError
+        ) {
           console.error(
             "Failed to start pulse:",
             startError
@@ -1088,14 +1132,18 @@ export default function AdminSessionPage() {
       },
       [
         topic,
-        selectedDuration,
         startingPulse,
       ]
     )
 
   /*
-   * Finish pulse
+   * =========================================================
+   * FINISH PULSE
+   * =========================================================
+   *
+   * Manual only.
    */
+
   const handleFinishPulse =
     useCallback(
       async () => {
@@ -1118,7 +1166,10 @@ export default function AdminSessionPage() {
           true
 
         try {
-          setEndingPulse(true)
+          setEndingPulse(
+            true
+          )
+
           setError(null)
 
           await persistRoundSnapshot(
@@ -1140,9 +1191,23 @@ export default function AdminSessionPage() {
             }
           )
 
-          setRoundSecondsLeft(0)
-          setTopic("")
-        } catch (finishError) {
+          /*
+           * Clear current-round UI only.
+           * Topic stays in Firestore/history.
+           */
+
+          const emptyCounts =
+            createEmptyCounts()
+
+          roundCountsRef.current =
+            emptyCounts
+
+          setRoundCounts(
+            emptyCounts
+          )
+        } catch (
+          finishError
+        ) {
           console.error(
             "Failed to finish pulse:",
             finishError
@@ -1155,7 +1220,9 @@ export default function AdminSessionPage() {
           finishingPulseRef.current =
             false
 
-          setEndingPulse(false)
+          setEndingPulse(
+            false
+          )
         }
       },
       [
@@ -1165,86 +1232,11 @@ export default function AdminSessionPage() {
     )
 
   /*
-   * Timer
+   * =========================================================
+   * END ENTIRE SESSION
+   * =========================================================
    */
-  useEffect(() => {
-    if (
-      !session ||
-      session.status !== "active" ||
-      session.roundStatus !==
-        "active"
-    ) {
-      return
-    }
 
-    const startedAt =
-      getTimestampMillis(
-        session.roundStartedAt
-      )
-
-    if (!startedAt) {
-      return
-    }
-
-    const duration =
-      Math.max(
-        1,
-        session.roundDurationSeconds ||
-          DEFAULT_ROUND_DURATION
-      )
-
-    const updateTimer =
-      () => {
-        const elapsed =
-          Math.floor(
-            (Date.now() -
-              startedAt) /
-              1000
-          )
-
-        const remaining =
-          Math.max(
-            0,
-            duration - elapsed
-          )
-
-        setRoundSecondsLeft(
-          remaining
-        )
-
-        if (
-          remaining === 0 &&
-          !finishingPulseRef.current
-        ) {
-          void handleFinishPulse()
-        }
-      }
-
-    updateTimer()
-
-    const interval =
-      window.setInterval(
-        updateTimer,
-        1000
-      )
-
-    return () => {
-      window.clearInterval(
-        interval
-      )
-    }
-  }, [
-    session?.id,
-    session?.status,
-    session?.roundStatus,
-    session?.roundStartedAt,
-    session?.roundDurationSeconds,
-    handleFinishPulse,
-  ])
-
-  /*
-   * End session
-   */
   const handleEndSession =
     useCallback(
       async () => {
@@ -1321,7 +1313,9 @@ export default function AdminSessionPage() {
                     snapshots,
                   }
                 )
-            } catch (summaryError) {
+            } catch (
+              summaryError
+            ) {
               console.error(
                 "AI summary generation failed:",
                 summaryError
@@ -1349,9 +1343,9 @@ export default function AdminSessionPage() {
                 : {}),
             }
           )
-
-          setRoundSecondsLeft(0)
-        } catch (endError) {
+        } catch (
+          endError
+        ) {
           console.error(
             "Failed to end session:",
             endError
@@ -1371,10 +1365,14 @@ export default function AdminSessionPage() {
     )
 
   /*
-   * Derived state
+   * =========================================================
+   * DERIVED STATE
+   * =========================================================
    */
+
   const isActive =
-    session?.status === "active"
+    session?.status ===
+    "active"
 
   const isPulseActive =
     Boolean(
@@ -1395,7 +1393,8 @@ export default function AdminSessionPage() {
     )
 
   const confusionRate =
-    currentPulseTotal > 0
+    currentPulseTotal >
+    0
       ? Math.round(
           ((roundCounts.confused +
             roundCounts.slightly_lost) /
@@ -1405,37 +1404,15 @@ export default function AdminSessionPage() {
       : 0
 
   const aiSummaryText =
-    toText(session?.aiSummary)
-
-  const roundTime =
-    formatTime(
-      roundSecondsLeft
+    toText(
+      session?.aiSummary
     )
 
-  const totalRoundSeconds =
-    Math.max(
-      1,
-      session?.roundDurationSeconds ||
-        DEFAULT_ROUND_DURATION
-    )
-
-  const progress =
-    isPulseActive
-      ? Math.max(
-          0,
-          Math.min(
-            100,
-            ((totalRoundSeconds -
-              roundSecondsLeft) /
-              totalRoundSeconds) *
-              100
-          )
-        )
-      : 0
-
-  const isAlmostDone =
-    isPulseActive &&
-    roundSecondsLeft <= 10
+  /*
+   * =========================================================
+   * LOADING
+   * =========================================================
+   */
 
   if (loading) {
     return (
@@ -1447,6 +1424,12 @@ export default function AdminSessionPage() {
       </main>
     )
   }
+
+  /*
+   * =========================================================
+   * MISSING SESSION
+   * =========================================================
+   */
 
   if (!session) {
     return (
@@ -1493,6 +1476,12 @@ export default function AdminSessionPage() {
   const currentSession =
     session
 
+  /*
+   * =========================================================
+   * PAGE
+   * =========================================================
+   */
+
   return (
     <main className="app-shell min-h-screen">
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
@@ -1509,6 +1498,7 @@ export default function AdminSessionPage() {
             className="group inline-flex items-center gap-2 rounded-2xl border border-(--border) bg-(--surface) px-4 py-2.5 text-xs font-bold text-(--foreground-secondary) transition-all hover:border-(--border-strong) hover:bg-(--surface-hover) hover:text-(--foreground)"
           >
             <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+
             Dashboard
           </button>
 
@@ -1577,9 +1567,7 @@ export default function AdminSessionPage() {
               </div>
 
               <h1 className="mt-5 max-w-4xl text-3xl font-black tracking-[-0.04em] sm:text-4xl lg:text-5xl">
-                {
-                  currentSession.title
-                }
+                {currentSession.title}
               </h1>
 
               <p className="mt-4 max-w-2xl text-sm leading-7 text-(--foreground-muted) sm:text-base">
@@ -1658,7 +1646,8 @@ export default function AdminSessionPage() {
         {isActive && (
           <section className="mt-6 grid gap-6 xl:grid-cols-[500px_minmax(0,1fr)]">
 
-            {/* QR */}
+            {/* QR ACCESS */}
+
             <div className="min-w-0">
               <SessionQRCode
                 joinCode={
@@ -1691,6 +1680,7 @@ export default function AdminSessionPage() {
             </div>
 
             {/* ROUND CONTROL */}
+
             <div className="relative min-w-0 overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6 sm:p-7">
               <div
                 aria-hidden="true"
@@ -1698,7 +1688,9 @@ export default function AdminSessionPage() {
               />
 
               <div className="relative z-10">
+
                 <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+
                   <div className="min-w-0">
                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
                       Teaching pulse
@@ -1721,38 +1713,20 @@ export default function AdminSessionPage() {
                   </div>
 
                   {isPulseActive ? (
-                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-                      <div
-                        className={[
-                          "flex items-center justify-center gap-2 rounded-2xl border px-4 py-2.5",
-                          isAlmostDone
-                            ? "border-rose-400/15 bg-rose-500/10"
-                            : "border-violet-400/10 bg-violet-500/10",
-                        ].join(" ")}
-                      >
-                        <Clock3
-                          className={[
-                            "h-4 w-4",
-                            isAlmostDone
-                              ? "text-rose-300"
-                              : "text-violet-300",
-                          ].join(" ")}
-                        />
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+
+                      <div className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 px-4 py-2.5">
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
 
                         <div>
-                          <p className="text-[9px] font-black uppercase tracking-wider text-(--foreground-subtle)">
-                            Time left
+                          <p className="text-[9px] font-black uppercase tracking-wider text-emerald-300">
+                            Live now
                           </p>
 
-                          <p
-                            className={[
-                              "font-mono text-lg font-black",
-                              isAlmostDone
-                                ? "text-rose-300"
-                                : "",
-                            ].join(" ")}
-                          >
-                            {roundTime}
+                          <p className="max-w-52 truncate text-sm font-black text-(--foreground)">
+                            {
+                              currentSession.roundTopic
+                            }
                           </p>
                         </div>
                       </div>
@@ -1767,7 +1741,7 @@ export default function AdminSessionPage() {
                         }
                         className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 text-xs font-black text-amber-300 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        <Clock3 className="h-4 w-4" />
+                        <Check className="h-4 w-4" />
 
                         {endingPulse
                           ? "Saving..."
@@ -1775,72 +1749,28 @@ export default function AdminSessionPage() {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-                      <select
-                        value={
-                          selectedDuration
-                        }
-                        onChange={(
-                          event
-                        ) => {
-                          const value =
-                            Number(
-                              event.target
-                                .value
-                            )
+                    <button
+                      type="button"
+                      disabled={
+                        startingPulse ||
+                        !topic.trim()
+                      }
+                      onClick={
+                        handleStartPulse
+                      }
+                      className="group inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-2xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 text-xs font-black text-white shadow-lg shadow-violet-500/20 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Radio className="h-4 w-4" />
 
-                          if (
-                            ROUND_DURATIONS.includes(
-                              value as RoundDuration
-                            )
-                          ) {
-                            setSelectedDuration(
-                              value as RoundDuration
-                            )
-                          }
-                        }}
-                        className="h-11 rounded-2xl border border-(--border) bg-(--background-soft) px-4 text-xs font-bold text-(--foreground-secondary) outline-none transition focus:border-violet-400/40 focus:ring-2 focus:ring-violet-500/10"
-                      >
-                        <option value="30">
-                          30 seconds
-                        </option>
+                      {startingPulse
+                        ? "Starting..."
+                        : currentSession.currentRound ===
+                            0
+                          ? "Start Pulse"
+                          : "Start Next Pulse"}
 
-                        <option value="60">
-                          1 minute
-                        </option>
-
-                        <option value="120">
-                          2 minutes
-                        </option>
-
-                        <option value="180">
-                          3 minutes
-                        </option>
-                      </select>
-
-                      <button
-                        type="button"
-                        disabled={
-                          startingPulse ||
-                          !topic.trim()
-                        }
-                        onClick={
-                          handleStartPulse
-                        }
-                        className="group inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 text-xs font-black text-white shadow-lg shadow-violet-500/20 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Radio className="h-4 w-4" />
-
-                        {startingPulse
-                          ? "Starting..."
-                          : currentSession.currentRound ===
-                              0
-                            ? "Start Pulse"
-                            : "Start Next Pulse"}
-
-                        <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                      </button>
-                    </div>
+                      <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                    </button>
                   )}
                 </div>
 
@@ -1856,16 +1786,19 @@ export default function AdminSessionPage() {
                     <div className="relative">
                       <input
                         id="pulse-topic"
-                        value={topic}
+                        value={
+                          topic
+                        }
                         onChange={(
                           event
                         ) => {
                           setTopic(
-                            event.target
-                              .value
+                            event.target.value
                           )
 
-                          if (error) {
+                          if (
+                            error
+                          ) {
                             setError(
                               null
                             )
@@ -1904,47 +1837,30 @@ export default function AdminSessionPage() {
 
                       <p className="text-[10px] leading-5 text-(--foreground-subtle)">
                         Enter the exact concept you are teaching.
-                        Nothing starts until you press Start Pulse.
+                        The pulse starts only when you press Start Pulse.
                       </p>
                     </div>
                   </div>
                 )}
 
                 {isPulseActive && (
-                  <div className="mt-7">
-                    <div className="flex items-center justify-between">
-                      <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
-                        Pulse progress
-                      </p>
+                  <div className="mt-6 rounded-2xl border border-violet-400/10 bg-violet-500/5 p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
+                        <Lightbulb className="h-5 w-5" />
+                      </div>
 
-                      <p
-                        className={[
-                          "text-[10px] font-black",
-                          isAlmostDone
-                            ? "text-rose-300"
-                            : "text-violet-300",
-                        ].join(" ")}
-                      >
-                        {Math.round(
-                          progress
-                        )}
-                        %
-                      </p>
-                    </div>
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
+                          Current teaching topic
+                        </p>
 
-                    <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-(--surface-hover)">
-                      <div
-                        className={[
-                          "h-full rounded-full transition-[width] duration-1000",
-                          isAlmostDone
-                            ? "bg-linear-to-r from-rose-500 to-orange-400"
-                            : "bg-linear-to-r from-violet-500 via-indigo-500 to-blue-400",
-                        ].join(" ")}
-                        style={{
-                          width:
-                            `${progress}%`,
-                        }}
-                      />
+                        <p className="mt-1 truncate text-sm font-black">
+                          {
+                            currentSession.roundTopic
+                          }
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1997,14 +1913,19 @@ export default function AdminSessionPage() {
           </section>
         )}
 
-        {/* METRICS */}
+        {/* =====================================================
+            METRICS
+        ===================================================== */}
+
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             icon={
               <Users className="h-5 w-5" />
             }
             label="Students"
-            value={participantCount}
+            value={
+              participantCount
+            }
             description="Unique students who responded"
             tone="blue"
           />
@@ -2014,14 +1935,16 @@ export default function AdminSessionPage() {
               <Radio className="h-5 w-5" />
             }
             label="Total signals"
-            value={totalSignals}
+            value={
+              totalSignals
+            }
             description="Responses across this session"
             tone="violet"
           />
 
           <MetricCard
             icon={
-              <Clock3 className="h-5 w-5" />
+              <CheckCircle2 className="h-5 w-5" />
             }
             label="Current pulse"
             value={
@@ -2029,7 +1952,7 @@ export default function AdminSessionPage() {
             }
             description={
               isPulseActive
-                ? `${roundTime} remaining`
+                ? "Live and collecting responses"
                 : "Waiting for faculty"
             }
             tone="emerald"
@@ -2054,8 +1977,13 @@ export default function AdminSessionPage() {
           />
         </section>
 
-        {/* LIVE PULSE + AI */}
+        {/* =====================================================
+            LIVE PULSE + AI
+        ===================================================== */}
+
         <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_370px]">
+
+          {/* LIVE */}
           <div className="surface overflow-hidden rounded-[2rem] p-6 sm:p-7">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -2077,7 +2005,7 @@ export default function AdminSessionPage() {
 
                 <p className="mt-1 text-sm leading-6 text-(--foreground-muted)">
                   {isPulseActive
-                    ? "Live responses for the current teaching topic."
+                    ? "Live responses from the current teaching topic."
                     : "The next topic will appear here when you manually start another pulse."}
                 </p>
               </div>
@@ -2088,7 +2016,9 @@ export default function AdminSessionPage() {
                 </p>
 
                 <p className="mt-1 text-2xl font-black">
-                  {currentPulseTotal}
+                  {
+                    currentPulseTotal
+                  }
                 </p>
               </div>
             </div>
@@ -2140,9 +2070,11 @@ export default function AdminSessionPage() {
                 aria-hidden="true"
                 className={[
                   "pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full blur-2xl",
-                  confusionRate >= 50
+                  confusionRate >=
+                    50
                     ? "bg-rose-400/10"
-                    : confusionRate >= 25
+                    : confusionRate >=
+                        25
                       ? "bg-amber-400/10"
                       : "bg-emerald-400/10",
                 ].join(" ")}
@@ -2155,7 +2087,9 @@ export default function AdminSessionPage() {
                   </p>
 
                   <p className="mt-2 text-4xl font-black">
-                    {confusionRate}
+                    {
+                      confusionRate
+                    }
                     %
                   </p>
                 </div>
@@ -2163,24 +2097,28 @@ export default function AdminSessionPage() {
                 <div
                   className={[
                     "rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-wider",
-                    confusionRate >= 50
+                    confusionRate >=
+                      50
                       ? "bg-rose-500/10 text-rose-300"
-                      : confusionRate >= 25
+                      : confusionRate >=
+                          25
                         ? "bg-amber-500/10 text-amber-300"
                         : "bg-emerald-500/10 text-emerald-300",
                   ].join(" ")}
                 >
-                  {confusionRate >= 50
+                  {confusionRate >=
+                    50
                     ? "High attention"
-                    : confusionRate >= 25
+                    : confusionRate >=
+                        25
                       ? "Watch closely"
                       : "Looking good"}
                 </div>
               </div>
 
               <p className="relative z-10 mt-3 max-w-xl text-xs leading-5 text-(--foreground-muted)">
-                Combines Slightly lost and Confused responses
-                from the current teaching topic.
+                Combines Slightly lost and Confused responses from
+                the current teaching topic.
               </p>
             </div>
 
@@ -2200,13 +2138,14 @@ export default function AdminSessionPage() {
                   </h3>
 
                   <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-(--foreground-muted)">
-                    Enter the next concept above and manually
-                    start a new PulseBoard pulse.
+                    Enter the next concept above and manually start
+                    a new PulseBoard pulse.
                   </p>
                 </div>
               )}
           </div>
 
+          {/* AI */}
           <aside className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6">
             <div
               aria-hidden="true"
@@ -2234,7 +2173,9 @@ export default function AdminSessionPage() {
               {aiSummaryText ? (
                 <div className="mt-6 max-h-[420px] overflow-auto rounded-2xl border border-(--border) bg-(--background-soft) p-4">
                   <p className="whitespace-pre-wrap text-sm leading-7 text-(--foreground-secondary)">
-                    {aiSummaryText}
+                    {
+                      aiSummaryText
+                    }
                   </p>
                 </div>
               ) : (
@@ -2316,14 +2257,33 @@ export default function AdminSessionPage() {
             />
 
             <DetailBox
-              label="Duration"
-              value={`${currentSession.roundDurationSeconds}s`}
+              label="Current round"
+              value={String(
+                currentSession.currentRound
+              )}
             />
           </div>
         </section>
       </div>
     </main>
   )
+}
+
+/*
+ * =========================================================
+ * HELPERS
+ * =========================================================
+ *
+ * We intentionally return null here until we wire a dedicated
+ * round query helper. persistRoundSnapshot already has the
+ * correct fallback to session-level students.
+ */
+
+function getUniqueStudentCountFromRound(
+  _round: number,
+  _session: SessionView
+): number | null {
+  return null
 }
 
 function InfoChip({

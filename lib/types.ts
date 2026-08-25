@@ -1,8 +1,12 @@
 import type { Timestamp } from "firebase/firestore"
 
-export type Role = "admin" | "student"
+export type Role =
+  | "admin"
+  | "student"
 
-export type SessionStatus = "active" | "ended"
+export type SessionStatus =
+  | "active"
+  | "ended"
 
 export type SignalType =
   | "got_it"
@@ -36,13 +40,35 @@ export type Session = {
   totalSignals: number
 
   aiSummary: AISummary | null
+
+  /*
+   * Live teaching pulse state
+   */
+  currentRound?: number
+  roundStatus?:
+    | "waiting"
+    | "active"
+    | "completed"
+
+  roundTopic?: string
+  roundStartedAt?: Timestamp | null
+  roundEndedAt?: Timestamp | null
 }
 
 export type Signal = {
   id: string
+
   sessionId: string
   studentId: string
+
   signal: SignalType
+
+  /*
+   * NEW:
+   * Every response belongs to a specific teaching pulse.
+   */
+  round: number
+
   timestamp: Timestamp
 }
 
@@ -51,11 +77,11 @@ export type SignalCounts = {
   slightly_lost: number
   confused: number
   interesting: number
-  total: number
 }
 
 export type Snapshot = {
-  timestamp: Timestamp
+  round: number
+  topic: string
 
   got_it: number
   slightly_lost: number

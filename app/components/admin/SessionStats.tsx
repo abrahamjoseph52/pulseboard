@@ -1,6 +1,16 @@
 import Card from "@/app/components/ui/Card"
-import type { SignalCounts } from "@/lib/types"
-import { calculateUnderstandingScore } from "@/lib/utils"
+
+import type {
+  SignalCounts,
+} from "@/lib/types"
+
+import {
+  getTotalSignalCount,
+} from "@/app/services/feedback.service"
+
+import {
+  calculateUnderstandingScore,
+} from "@/lib/utils"
 
 type SessionStatsProps = {
   participantCount: number
@@ -21,7 +31,10 @@ function StatCard({
   icon,
 }: StatCardProps) {
   return (
-    <Card padding="md" className="h-full">
+    <Card
+      padding="md"
+      className="h-full"
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-medium text-slate-500">
@@ -49,18 +62,28 @@ export default function SessionStats({
   participantCount,
   counts,
 }: SessionStatsProps) {
-  const understandingScore = calculateUnderstandingScore(
-    counts.got_it,
-    counts.slightly_lost,
-    counts.confused,
-    counts.total
-  )
+  const total =
+    getTotalSignalCount(
+      counts
+    )
+
+  const understandingScore =
+    calculateUnderstandingScore(
+      counts.got_it,
+      counts.slightly_lost,
+      counts.confused,
+      total
+    )
 
   const responseRate =
     participantCount > 0
       ? Math.min(
           100,
-          Math.round((counts.total / participantCount) * 100)
+          Math.round(
+            (total /
+              participantCount) *
+              100
+          )
         )
       : 0
 
@@ -68,14 +91,16 @@ export default function SessionStats({
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard
         label="Participants"
-        value={participantCount}
+        value={
+          participantCount
+        }
         description="Students currently in this session"
         icon="👥"
       />
 
       <StatCard
         label="Total Signals"
-        value={counts.total}
+        value={total}
         description="Feedback responses received"
         icon="📡"
       />
