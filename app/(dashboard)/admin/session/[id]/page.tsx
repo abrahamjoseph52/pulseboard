@@ -4,8 +4,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
-  CheckCircle2,
-  Clock3,
   HelpCircle,
   Lightbulb,
   Radio,
@@ -13,6 +11,7 @@ import {
   Users,
   XCircle,
   Zap,
+  Clock3,
 } from "lucide-react"
 
 import {
@@ -38,9 +37,7 @@ import {
   updateDoc,
 } from "firebase/firestore"
 
-import {
-  db,
-} from "@/lib/firebase"
+import { db } from "@/lib/firebase"
 
 import type {
   Session,
@@ -81,11 +78,9 @@ type FirestoreSessionData =
   Omit<Session, "id"> & {
     totalSignals?: unknown
     aiSummary?: unknown
-
     roundStatus?: unknown
     currentRound?: unknown
     roundDurationSeconds?: unknown
-
     roundTopic?: unknown
     roundStartedAt?: unknown
     roundEndedAt?: unknown
@@ -97,19 +92,15 @@ type SessionView = {
   courseCode: string
   joinCode: string
   status: Session["status"]
-
   participantCount: number
   totalSignals: number
-
   aiSummary: unknown
-
   roundStatus: RoundStatus
   currentRound: number
   roundDurationSeconds: number
   roundTopic: string
   roundStartedAt: unknown
   roundEndedAt: unknown
-
   raw: FirestoreSessionData
 }
 
@@ -119,8 +110,7 @@ type LiveSignalStats = {
   uniqueStudents: number
 }
 
-const DEFAULT_ROUND_DURATION: RoundDuration =
-  120
+const DEFAULT_ROUND_DURATION: RoundDuration = 120
 
 const ROUND_DURATIONS: RoundDuration[] = [
   30,
@@ -142,9 +132,7 @@ const SIGNAL_META: Record<
 > = {
   got_it: {
     label: "Got it",
-    icon: (
-      <Check className="h-5 w-5" />
-    ),
+    icon: <Check className="h-5 w-5" />,
     tone:
       "border-emerald-400/15 bg-emerald-500/[0.055]",
     iconTone:
@@ -157,9 +145,7 @@ const SIGNAL_META: Record<
 
   slightly_lost: {
     label: "Slightly lost",
-    icon: (
-      <Lightbulb className="h-5 w-5" />
-    ),
+    icon: <Lightbulb className="h-5 w-5" />,
     tone:
       "border-amber-400/15 bg-amber-500/[0.055]",
     iconTone:
@@ -172,9 +158,7 @@ const SIGNAL_META: Record<
 
   confused: {
     label: "Confused",
-    icon: (
-      <HelpCircle className="h-5 w-5" />
-    ),
+    icon: <HelpCircle className="h-5 w-5" />,
     tone:
       "border-rose-400/15 bg-rose-500/[0.055]",
     iconTone:
@@ -187,9 +171,7 @@ const SIGNAL_META: Record<
 
   interesting: {
     label: "Interesting",
-    icon: (
-      <Sparkles className="h-5 w-5" />
-    ),
+    icon: <Sparkles className="h-5 w-5" />,
     tone:
       "border-violet-400/15 bg-violet-500/[0.055]",
     iconTone:
@@ -209,8 +191,7 @@ function createEmptyCounts(): SignalCounts {
 
 function createInitialLiveStats(): LiveSignalStats {
   return {
-    counts:
-      createEmptyCounts(),
+    counts: createEmptyCounts(),
     total: 0,
     uniqueStudents: 0,
   }
@@ -226,11 +207,8 @@ function toNumber(
     return value
   }
 
-  if (
-    typeof value === "string"
-  ) {
-    const parsed =
-      Number(value)
+  if (typeof value === "string") {
+    const parsed = Number(value)
 
     return Number.isFinite(parsed)
       ? parsed
@@ -250,9 +228,7 @@ function toText(
     return ""
   }
 
-  if (
-    typeof value === "string"
-  ) {
+  if (typeof value === "string") {
     return value.trim()
   }
 
@@ -264,9 +240,7 @@ function toText(
     return String(value)
   }
 
-  if (
-    typeof value === "object"
-  ) {
+  if (typeof value === "object") {
     const record =
       value as Record<
         string,
@@ -338,13 +312,9 @@ function getTimestampMillis(
     typeof value === "string"
   ) {
     const parsed =
-      new Date(
-        value
-      ).getTime()
+      new Date(value).getTime()
 
-    return Number.isFinite(
-      parsed
-    )
+    return Number.isFinite(parsed)
       ? parsed
       : 0
   }
@@ -358,9 +328,7 @@ function formatTime(
   const safeSeconds =
     Math.max(
       0,
-      Math.floor(
-        totalSeconds
-      )
+      Math.floor(totalSeconds)
     )
 
   const minutes =
@@ -373,15 +341,9 @@ function formatTime(
 
   return `${minutes
     .toString()
-    .padStart(
-      2,
-      "0"
-    )}:${seconds
+    .padStart(2, "0")}:${seconds
     .toString()
-    .padStart(
-      2,
-      "0"
-    )}`
+    .padStart(2, "0")}`
 }
 
 function createSnapshot(
@@ -392,104 +354,73 @@ function createSnapshot(
 ): Snapshot {
   return {
     round,
-    topic:
-      topic.trim(),
-    got_it:
-      counts.got_it,
+    topic: topic.trim(),
+    got_it: counts.got_it,
     slightly_lost:
       counts.slightly_lost,
-    confused:
-      counts.confused,
+    confused: counts.confused,
     interesting:
       counts.interesting,
-    total:
-      totalStudents,
+    total: totalStudents,
   }
 }
 
 export default function AdminSessionPage() {
-  const params =
-    useParams()
-
-  const router =
-    useRouter()
+  const params = useParams()
+  const router = useRouter()
 
   const sessionId =
-    typeof params.id ===
-    "string"
+    typeof params.id === "string"
       ? params.id
       : ""
 
-  const [
-    session,
-    setSession,
-  ] =
+  const [session, setSession] =
     useState<SessionView | null>(
       null
     )
 
-  const [
-    loading,
-    setLoading,
-  ] = useState(
-    Boolean(sessionId)
-  )
+  const [loading, setLoading] =
+    useState(Boolean(sessionId))
 
-  const [
-    error,
-    setError,
-  ] =
+  const [error, setError] =
     useState<string | null>(
       sessionId
         ? null
         : "Session ID is missing."
     )
 
-  const [
-    ending,
-    setEnding,
-  ] = useState(false)
+  const [ending, setEnding] =
+    useState(false)
 
   const [
     startingPulse,
     setStartingPulse,
   ] = useState(false)
 
-  const [
-    endingPulse,
-    setEndingPulse,
-  ] = useState(false)
+  const [endingPulse, setEndingPulse] =
+    useState(false)
 
-  const [
-    topic,
-    setTopic,
-  ] = useState("")
+  const [topic, setTopic] =
+    useState("")
 
   const [
     selectedDuration,
     setSelectedDuration,
-  ] =
-    useState<RoundDuration>(
-      DEFAULT_ROUND_DURATION
-    )
+  ] = useState<RoundDuration>(
+    DEFAULT_ROUND_DURATION
+  )
 
   const [
     roundSecondsLeft,
     setRoundSecondsLeft,
   ] = useState(0)
 
-  const [
-    liveStats,
-    setLiveStats,
-  ] =
+  const [liveStats, setLiveStats] =
     useState<LiveSignalStats>(
       createInitialLiveStats
     )
 
-  const [
-    roundCounts,
-    setRoundCounts,
-  ] =
+  const [roundCounts, setRoundCounts] =
     useState<SignalCounts>(
       createEmptyCounts
     )
@@ -497,9 +428,7 @@ export default function AdminSessionPage() {
   const [
     roundSnapshots,
     setRoundSnapshots,
-  ] = useState<
-    Snapshot[]
-  >([])
+  ] = useState<Snapshot[]>([])
 
   const sessionRef =
     useRef<SessionView | null>(
@@ -517,9 +446,7 @@ export default function AdminSessionPage() {
     )
 
   const roundSnapshotsRef =
-    useRef<Snapshot[]>(
-      []
-    )
+    useRef<Snapshot[]>([])
 
   const seenSignalIdsRef =
     useRef<Set<string>>(
@@ -536,16 +463,18 @@ export default function AdminSessionPage() {
     useRef(false)
 
   useEffect(() => {
-    sessionRef.current =
-      session
+    sessionRef.current = session
   }, [session])
 
+  /*
+   * Load session
+   */
   useEffect(() => {
     if (!sessionId) {
       return
     }
 
-    const sessionRefFirestore =
+    const firestoreSessionRef =
       doc(
         db,
         "sessions",
@@ -554,11 +483,9 @@ export default function AdminSessionPage() {
 
     const unsubscribe =
       onSnapshot(
-        sessionRefFirestore,
+        firestoreSessionRef,
         (snapshot) => {
-          if (
-            !snapshot.exists()
-          ) {
+          if (!snapshot.exists()) {
             setSession(null)
             setError(
               "This session could not be found."
@@ -572,8 +499,7 @@ export default function AdminSessionPage() {
 
           const nextSession:
             SessionView = {
-            id:
-              snapshot.id,
+            id: snapshot.id,
 
             title:
               typeof raw.title ===
@@ -593,8 +519,7 @@ export default function AdminSessionPage() {
                 ? raw.joinCode
                 : "",
 
-            status:
-              raw.status,
+            status: raw.status,
 
             participantCount:
               toNumber(
@@ -655,14 +580,10 @@ export default function AdminSessionPage() {
             nextSession.roundStatus !==
             "active"
           ) {
-            setRoundSecondsLeft(
-              0
-            )
+            setRoundSecondsLeft(0)
           }
         },
-        (
-          snapshotError
-        ) => {
+        (snapshotError) => {
           console.error(
             "Failed to load session:",
             snapshotError
@@ -679,6 +600,9 @@ export default function AdminSessionPage() {
     return unsubscribe
   }, [sessionId])
 
+  /*
+   * Load saved snapshots once
+   */
   useEffect(() => {
     if (
       !sessionId ||
@@ -709,9 +633,7 @@ export default function AdminSessionPage() {
           const snapshots =
             snapshot.docs
               .map(
-                (
-                  snapshotDoc
-                ) => {
+                (snapshotDoc) => {
                   const data =
                     snapshotDoc.data()
 
@@ -756,18 +678,16 @@ export default function AdminSessionPage() {
               )
               .filter(
                 (
-                  snapshot
+                  item
                 ) =>
-                  snapshot.round >
-                  0
+                  item.round > 0
               )
               .sort(
                 (
                   a,
                   b
                 ) =>
-                  a.round -
-                  b.round
+                  a.round - b.round
               )
 
           roundSnapshotsRef.current =
@@ -776,9 +696,7 @@ export default function AdminSessionPage() {
           setRoundSnapshots(
             snapshots
           )
-        } catch (
-          snapshotError
-        ) {
+        } catch (snapshotError) {
           console.error(
             "Failed to load round snapshots:",
             snapshotError
@@ -789,6 +707,9 @@ export default function AdminSessionPage() {
     void loadSnapshots()
   }, [sessionId])
 
+  /*
+   * Live signals
+   */
   useEffect(() => {
     if (!sessionId) {
       return
@@ -797,16 +718,12 @@ export default function AdminSessionPage() {
     const unsubscribe =
       subscribeToSessionSignals(
         sessionId,
-        (
-          signals: Signal[]
-        ) => {
+        (signals: Signal[]) => {
           const counts =
             createEmptyCounts()
 
           signals.forEach(
-            (
-              signal
-            ) => {
+            (signal) => {
               if (
                 Object.prototype.hasOwnProperty.call(
                   counts,
@@ -830,8 +747,7 @@ export default function AdminSessionPage() {
               signals
             )
 
-          const nextStats:
-            LiveSignalStats =
+          const nextStats: LiveSignalStats =
             {
               counts,
               total,
@@ -849,12 +765,8 @@ export default function AdminSessionPage() {
             !signalsInitializedRef.current
           ) {
             signals.forEach(
-              (
-                signal
-              ) => {
-                if (
-                  signal.id
-                ) {
+              (signal) => {
+                if (signal.id) {
                   seenSignalIdsRef.current.add(
                     signal.id
                   )
@@ -870,12 +782,8 @@ export default function AdminSessionPage() {
 
           const newSignals =
             signals.filter(
-              (
-                signal
-              ) => {
-                if (
-                  !signal.id
-                ) {
+              (signal) => {
+                if (!signal.id) {
                   return false
                 }
 
@@ -886,19 +794,14 @@ export default function AdminSessionPage() {
             )
 
           if (
-            newSignals.length ===
-            0
+            newSignals.length === 0
           ) {
             return
           }
 
           newSignals.forEach(
-            (
-              signal
-            ) => {
-              if (
-                signal.id
-              ) {
+            (signal) => {
+              if (signal.id) {
                 seenSignalIdsRef.current.add(
                   signal.id
                 )
@@ -920,9 +823,7 @@ export default function AdminSessionPage() {
             }
 
           newSignals.forEach(
-            (
-              signal
-            ) => {
+            (signal) => {
               if (
                 Object.prototype.hasOwnProperty.call(
                   nextRoundCounts,
@@ -957,9 +858,7 @@ export default function AdminSessionPage() {
                 total,
             }
           ).catch(
-            (
-              updateError
-            ) => {
+            (updateError) => {
               console.error(
                 "Failed to update session aggregates:",
                 updateError
@@ -967,9 +866,7 @@ export default function AdminSessionPage() {
             }
           )
         },
-        (
-          signalError
-        ) => {
+        (signalError) => {
           console.error(
             "Signal subscription failed:",
             signalError
@@ -984,6 +881,9 @@ export default function AdminSessionPage() {
     return unsubscribe
   }, [sessionId])
 
+  /*
+   * Save current round
+   */
   const persistRoundSnapshot =
     useCallback(
       async (
@@ -1030,21 +930,15 @@ export default function AdminSessionPage() {
 
         const alreadySaved =
           roundSnapshotsRef.current.some(
-            (
-              snapshot
-            ) =>
+            (snapshot) =>
               snapshot.round ===
               currentSession.currentRound
           )
 
-        if (
-          alreadySaved
-        ) {
+        if (alreadySaved) {
           return (
             roundSnapshotsRef.current.find(
-              (
-                snapshot
-              ) =>
+              (snapshot) =>
                 snapshot.round ===
                 currentSession.currentRound
             ) ?? null
@@ -1092,6 +986,9 @@ export default function AdminSessionPage() {
       [sessionId]
     )
 
+  /*
+   * Start pulse
+   */
   const handleStartPulse =
     useCallback(
       async () => {
@@ -1116,26 +1013,20 @@ export default function AdminSessionPage() {
           setError(
             "Enter a teaching topic before starting the pulse."
           )
-
           return
         }
 
         if (
-          cleanTopic.length >
-          120
+          cleanTopic.length > 120
         ) {
           setError(
             "Topic must be 120 characters or less."
           )
-
           return
         }
 
         try {
-          setStartingPulse(
-            true
-          )
-
+          setStartingPulse(true)
           setError(null)
 
           const emptyCounts =
@@ -1180,9 +1071,7 @@ export default function AdminSessionPage() {
           )
 
           setTopic("")
-        } catch (
-          startError
-        ) {
+        } catch (startError) {
           console.error(
             "Failed to start pulse:",
             startError
@@ -1204,6 +1093,9 @@ export default function AdminSessionPage() {
       ]
     )
 
+  /*
+   * Finish pulse
+   */
   const handleFinishPulse =
     useCallback(
       async () => {
@@ -1226,10 +1118,7 @@ export default function AdminSessionPage() {
           true
 
         try {
-          setEndingPulse(
-            true
-          )
-
+          setEndingPulse(true)
           setError(null)
 
           await persistRoundSnapshot(
@@ -1251,14 +1140,9 @@ export default function AdminSessionPage() {
             }
           )
 
-          setRoundSecondsLeft(
-            0
-          )
-
+          setRoundSecondsLeft(0)
           setTopic("")
-        } catch (
-          finishError
-        ) {
+        } catch (finishError) {
           console.error(
             "Failed to finish pulse:",
             finishError
@@ -1271,9 +1155,7 @@ export default function AdminSessionPage() {
           finishingPulseRef.current =
             false
 
-          setEndingPulse(
-            false
-          )
+          setEndingPulse(false)
         }
       },
       [
@@ -1282,11 +1164,13 @@ export default function AdminSessionPage() {
       ]
     )
 
+  /*
+   * Timer
+   */
   useEffect(() => {
     if (
       !session ||
-      session.status !==
-        "active" ||
+      session.status !== "active" ||
       session.roundStatus !==
         "active"
     ) {
@@ -1321,8 +1205,7 @@ export default function AdminSessionPage() {
         const remaining =
           Math.max(
             0,
-            duration -
-              elapsed
+            duration - elapsed
           )
 
         setRoundSecondsLeft(
@@ -1359,6 +1242,9 @@ export default function AdminSessionPage() {
     handleFinishPulse,
   ])
 
+  /*
+   * End session
+   */
   const handleEndSession =
     useCallback(
       async () => {
@@ -1414,12 +1300,10 @@ export default function AdminSessionPage() {
               ...roundSnapshotsRef.current,
             ]
 
-          let aiSummary =
-            ""
+          let aiSummary = ""
 
           if (
-            snapshots.length >
-            0
+            snapshots.length > 0
           ) {
             try {
               aiSummary =
@@ -1437,9 +1321,7 @@ export default function AdminSessionPage() {
                     snapshots,
                   }
                 )
-            } catch (
-              summaryError
-            ) {
+            } catch (summaryError) {
               console.error(
                 "AI summary generation failed:",
                 summaryError
@@ -1468,12 +1350,8 @@ export default function AdminSessionPage() {
             }
           )
 
-          setRoundSecondsLeft(
-            0
-          )
-        } catch (
-          endError
-        ) {
+          setRoundSecondsLeft(0)
+        } catch (endError) {
           console.error(
             "Failed to end session:",
             endError
@@ -1492,9 +1370,11 @@ export default function AdminSessionPage() {
       ]
     )
 
+  /*
+   * Derived state
+   */
   const isActive =
-    session?.status ===
-    "active"
+    session?.status === "active"
 
   const isPulseActive =
     Boolean(
@@ -1515,8 +1395,7 @@ export default function AdminSessionPage() {
     )
 
   const confusionRate =
-    currentPulseTotal >
-    0
+    currentPulseTotal > 0
       ? Math.round(
           ((roundCounts.confused +
             roundCounts.slightly_lost) /
@@ -1526,9 +1405,7 @@ export default function AdminSessionPage() {
       : 0
 
   const aiSummaryText =
-    toText(
-      session?.aiSummary
-    )
+    toText(session?.aiSummary)
 
   const roundTime =
     formatTime(
@@ -1619,10 +1496,8 @@ export default function AdminSessionPage() {
   return (
     <main className="app-shell min-h-screen">
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
-        {/* =====================================================
-            TOP BAR
-        ===================================================== */}
 
+        {/* TOP BAR */}
         <header className="flex items-center justify-between gap-3">
           <button
             type="button"
@@ -1649,10 +1524,7 @@ export default function AdminSessionPage() {
           </div>
         </header>
 
-        {/* =====================================================
-            HERO
-        ===================================================== */}
-
+        {/* HERO */}
         <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-violet-400/10 bg-linear-to-br from-violet-600/[0.14] via-(--surface) to-indigo-600/[0.10] p-6 shadow-(--shadow-lg) sm:p-8 lg:p-10">
           <div
             aria-hidden="true"
@@ -1755,9 +1627,7 @@ export default function AdminSessionPage() {
                 onClick={
                   handleEndSession
                 }
-                disabled={
-                  ending
-                }
+                disabled={ending}
                 className="group inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-5 text-xs font-black text-rose-300 transition-all hover:-translate-y-0.5 hover:bg-rose-500/15 hover:shadow-lg hover:shadow-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <XCircle className="h-4 w-4" />
@@ -1770,6 +1640,7 @@ export default function AdminSessionPage() {
           </div>
         </section>
 
+        {/* ERROR */}
         {error && (
           <div className="mt-5 flex items-start gap-3 rounded-2xl border border-rose-500/15 bg-rose-500/[0.06] px-4 py-3">
             <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
@@ -1785,25 +1656,10 @@ export default function AdminSessionPage() {
         ===================================================== */}
 
         {isActive && (
-          <section className="mt-6 grid gap-6 xl:grid-cols-[350px_minmax(0,1fr)]">
-            {/* QR ACCESS */}
-            <div className="overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-5 sm:p-6">
-              <div className="mb-5 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
-                    Classroom access
-                  </p>
+          <section className="mt-6 grid gap-6 xl:grid-cols-[500px_minmax(0,1fr)]">
 
-                  <h2 className="mt-2 text-xl font-black">
-                    Let students join
-                  </h2>
-                </div>
-
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
-                  <Radio className="h-5 w-5" />
-                </div>
-              </div>
-
+            {/* QR */}
+            <div className="min-w-0">
               <SessionQRCode
                 joinCode={
                   currentSession.joinCode
@@ -1816,7 +1672,7 @@ export default function AdminSessionPage() {
                 }
               />
 
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <MiniInfo
                   label="Join code"
                   value={
@@ -1835,7 +1691,7 @@ export default function AdminSessionPage() {
             </div>
 
             {/* ROUND CONTROL */}
-            <div className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6 sm:p-7">
+            <div className="relative min-w-0 overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6 sm:p-7">
               <div
                 aria-hidden="true"
                 className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-violet-500/10 blur-3xl"
@@ -1865,7 +1721,7 @@ export default function AdminSessionPage() {
                   </div>
 
                   {isPulseActive ? (
-                    <div className="flex flex-col gap-2 sm:flex-row">
+                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
                       <div
                         className={[
                           "flex items-center justify-center gap-2 rounded-2xl border px-4 py-2.5",
@@ -1896,9 +1752,7 @@ export default function AdminSessionPage() {
                                 : "",
                             ].join(" ")}
                           >
-                            {
-                              roundTime
-                            }
+                            {roundTime}
                           </p>
                         </div>
                       </div>
@@ -1921,7 +1775,7 @@ export default function AdminSessionPage() {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex flex-col gap-2 sm:min-w-65 sm:flex-row">
+                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
                       <select
                         value={
                           selectedDuration
@@ -1931,7 +1785,8 @@ export default function AdminSessionPage() {
                         ) => {
                           const value =
                             Number(
-                              event.target.value
+                              event.target
+                                .value
                             )
 
                           if (
@@ -2001,19 +1856,16 @@ export default function AdminSessionPage() {
                     <div className="relative">
                       <input
                         id="pulse-topic"
-                        value={
-                          topic
-                        }
+                        value={topic}
                         onChange={(
                           event
                         ) => {
                           setTopic(
-                            event.target.value
+                            event.target
+                              .value
                           )
 
-                          if (
-                            error
-                          ) {
+                          if (error) {
                             setError(
                               null
                             )
@@ -2036,17 +1888,13 @@ export default function AdminSessionPage() {
                             }
                           }
                         }}
-                        maxLength={
-                          120
-                        }
+                        maxLength={120}
                         placeholder="Example: Database normalization"
                         className="h-13 w-full rounded-2xl border border-(--border) bg-(--background-soft) px-4 pr-20 text-sm font-semibold text-(--foreground) outline-none transition placeholder:text-(--foreground-subtle) focus:border-violet-400/40 focus:ring-2 focus:ring-violet-500/10"
                       />
 
                       <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 rounded-lg bg-(--surface) px-2 py-1 text-[9px] font-bold text-(--foreground-subtle)">
-                        {
-                          topic.length
-                        }
+                        {topic.length}
                         /120
                       </span>
                     </div>
@@ -2149,19 +1997,14 @@ export default function AdminSessionPage() {
           </section>
         )}
 
-        {/* =====================================================
-            METRICS
-        ===================================================== */}
-
+        {/* METRICS */}
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             icon={
               <Users className="h-5 w-5" />
             }
             label="Students"
-            value={
-              participantCount
-            }
+            value={participantCount}
             description="Unique students who responded"
             tone="blue"
           />
@@ -2171,9 +2014,7 @@ export default function AdminSessionPage() {
               <Radio className="h-5 w-5" />
             }
             label="Total signals"
-            value={
-              totalSignals
-            }
+            value={totalSignals}
             description="Responses across this session"
             tone="violet"
           />
@@ -2213,10 +2054,7 @@ export default function AdminSessionPage() {
           />
         </section>
 
-        {/* =====================================================
-            LIVE PULSE + AI
-        ===================================================== */}
-
+        {/* LIVE PULSE + AI */}
         <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_370px]">
           <div className="surface overflow-hidden rounded-[2rem] p-6 sm:p-7">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -2250,9 +2088,7 @@ export default function AdminSessionPage() {
                 </p>
 
                 <p className="mt-1 text-2xl font-black">
-                  {
-                    currentPulseTotal
-                  }
+                  {currentPulseTotal}
                 </p>
               </div>
             </div>
@@ -2304,11 +2140,9 @@ export default function AdminSessionPage() {
                 aria-hidden="true"
                 className={[
                   "pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full blur-2xl",
-                  confusionRate >=
-                    50
+                  confusionRate >= 50
                     ? "bg-rose-400/10"
-                    : confusionRate >=
-                        25
+                    : confusionRate >= 25
                       ? "bg-amber-400/10"
                       : "bg-emerald-400/10",
                 ].join(" ")}
@@ -2321,9 +2155,7 @@ export default function AdminSessionPage() {
                   </p>
 
                   <p className="mt-2 text-4xl font-black">
-                    {
-                      confusionRate
-                    }
+                    {confusionRate}
                     %
                   </p>
                 </div>
@@ -2331,28 +2163,24 @@ export default function AdminSessionPage() {
                 <div
                   className={[
                     "rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-wider",
-                    confusionRate >=
-                      50
+                    confusionRate >= 50
                       ? "bg-rose-500/10 text-rose-300"
-                      : confusionRate >=
-                          25
+                      : confusionRate >= 25
                         ? "bg-amber-500/10 text-amber-300"
                         : "bg-emerald-500/10 text-emerald-300",
                   ].join(" ")}
                 >
-                  {confusionRate >=
-                    50
+                  {confusionRate >= 50
                     ? "High attention"
-                    : confusionRate >=
-                        25
+                    : confusionRate >= 25
                       ? "Watch closely"
                       : "Looking good"}
                 </div>
               </div>
 
               <p className="relative z-10 mt-3 max-w-xl text-xs leading-5 text-(--foreground-muted)">
-                Combines Slightly lost and Confused responses from
-                the current teaching topic.
+                Combines Slightly lost and Confused responses
+                from the current teaching topic.
               </p>
             </div>
 
@@ -2372,14 +2200,13 @@ export default function AdminSessionPage() {
                   </h3>
 
                   <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-(--foreground-muted)">
-                    Enter the next concept above and manually start
-                    a new PulseBoard pulse.
+                    Enter the next concept above and manually
+                    start a new PulseBoard pulse.
                   </p>
                 </div>
               )}
           </div>
 
-          {/* AI */}
           <aside className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6">
             <div
               aria-hidden="true"
@@ -2407,9 +2234,7 @@ export default function AdminSessionPage() {
               {aiSummaryText ? (
                 <div className="mt-6 max-h-[420px] overflow-auto rounded-2xl border border-(--border) bg-(--background-soft) p-4">
                   <p className="whitespace-pre-wrap text-sm leading-7 text-(--foreground-secondary)">
-                    {
-                      aiSummaryText
-                    }
+                    {aiSummaryText}
                   </p>
                 </div>
               ) : (
@@ -2449,10 +2274,7 @@ export default function AdminSessionPage() {
           </aside>
         </section>
 
-        {/* =====================================================
-            SESSION DETAILS
-        ===================================================== */}
-
+        {/* SESSION DETAILS */}
         <section className="surface mt-6 overflow-hidden rounded-[2rem] p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
@@ -2688,8 +2510,7 @@ function LiveSignalCard({
   const percentage =
     total > 0
       ? Math.round(
-          (count /
-            total) *
+          (count / total) *
             100
         )
       : 0
@@ -2768,8 +2589,7 @@ function DetailBox({
       </p>
 
       <p className="mt-2 truncate text-sm font-bold text-(--foreground-secondary)">
-        {value ||
-          "—"}
+        {value || "—"}
       </p>
     </div>
   )
