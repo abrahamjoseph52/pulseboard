@@ -1,4 +1,4 @@
-import Card from "@/components/ui/Card"
+import Card from "@/app/components/ui/Card"
 import type { SignalCounts, SignalType } from "@/lib/types"
 import { calculatePercentage } from "@/lib/utils"
 

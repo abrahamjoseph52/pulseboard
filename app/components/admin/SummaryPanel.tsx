@@ -2,9 +2,9 @@
 
 import { useState } from "react"
 
-import Badge from "@/components/ui/Badge"
-import Button from "@/components/ui/Button"
-import Card from "@/components/ui/Card"
+import Badge from "@/app/components/ui/Badge"
+import Button from "@/app/components/ui/Button"
+import Card from "@/app/components/ui/Card"
 import type { AISummary } from "@/lib/types"
 
 type SummaryPanelProps = {

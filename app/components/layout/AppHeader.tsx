@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation"
 
-import Button from "@/components/ui/Button"
+import Button from "@/app/components/ui/Button"
 import { APP_NAME, ROUTES } from "@/lib/constants"
 import { getInitials } from "@/lib/utils"
 
