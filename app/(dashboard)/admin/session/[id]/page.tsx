@@ -63,7 +63,7 @@ import Loading from "@/app/components/ui/Loading"
 import ThemeToggle from "@/app/components/ThemeToggle"
 import SessionQRCode from "@/app/components/admin/SessionQRCode"
 
-type RoundStatus =
+type TopicStatus =
   | "waiting"
   | "active"
   | "completed"
@@ -92,12 +92,12 @@ type SessionView = {
 
   aiSummary: unknown
 
-  roundStatus: RoundStatus
-  currentRound: number
-  roundTopic: string
+  topicStatus: TopicStatus
+  currentTopicNumber: number
+  currentTopic: string
 
-  roundStartedAt: unknown
-  roundEndedAt: unknown
+  topicStartedAt: unknown
+  topicEndedAt: unknown
 
   raw: FirestoreSessionData
 }
@@ -106,6 +106,7 @@ type LiveSignalStats = {
   counts: SignalCounts
   total: number
   uniqueStudents: number
+  signals: Signal[]
 }
 
 const SIGNAL_META: Record<
@@ -189,12 +190,11 @@ function createInitialLiveStats(): LiveSignalStats {
     counts: createEmptyCounts(),
     total: 0,
     uniqueStudents: 0,
+    signals: [],
   }
 }
 
-function toNumber(
-  value: unknown
-): number {
+function toNumber(value: unknown): number {
   if (
     typeof value === "number" &&
     Number.isFinite(value)
@@ -213,9 +213,7 @@ function toNumber(
   return 0
 }
 
-function toText(
-  value: unknown
-): string {
+function toText(value: unknown): string {
   if (
     value === null ||
     value === undefined
@@ -237,28 +235,22 @@ function toText(
 
   if (typeof value === "object") {
     const record =
-      value as Record<
-        string,
-        unknown
-      >
+      value as Record<string, unknown>
 
     if (
-      typeof record.text ===
-      "string"
+      typeof record.text === "string"
     ) {
       return record.text.trim()
     }
 
     if (
-      typeof record.summary ===
-      "string"
+      typeof record.summary === "string"
     ) {
       return record.summary.trim()
     }
 
     if (
-      typeof record.content ===
-      "string"
+      typeof record.content === "string"
     ) {
       return record.content.trim()
     }
@@ -278,13 +270,13 @@ function toText(
 }
 
 function createSnapshot(
-  round: number,
+  topicNumber: number,
   topic: string,
   counts: SignalCounts,
   totalStudents: number
 ): Snapshot {
   return {
-    round,
+    round: topicNumber,
     topic: topic.trim(),
     got_it: counts.got_it,
     slightly_lost:
@@ -294,6 +286,40 @@ function createSnapshot(
       counts.interesting,
     total: totalStudents,
   }
+}
+
+function getSignalsForTopic(
+  signals: Signal[],
+  topicNumber: number
+): Signal[] {
+  if (topicNumber <= 0) {
+    return []
+  }
+
+  return signals.filter(
+    (signal) =>
+      signal.round === topicNumber
+  )
+}
+
+function getCountsForSignals(
+  signals: Signal[]
+): SignalCounts {
+  const counts =
+    createEmptyCounts()
+
+  signals.forEach((signal) => {
+    if (
+      Object.prototype.hasOwnProperty.call(
+        counts,
+        signal.signal
+      )
+    ) {
+      counts[signal.signal] += 1
+    }
+  })
+
+  return counts
 }
 
 export default function AdminSessionPage() {
@@ -315,9 +341,7 @@ export default function AdminSessionPage() {
   const [
     loading,
     setLoading,
-  ] = useState(
-    Boolean(sessionId)
-  )
+  ] = useState(Boolean(sessionId))
 
   const [
     error,
@@ -334,18 +358,18 @@ export default function AdminSessionPage() {
   ] = useState(false)
 
   const [
-    startingPulse,
-    setStartingPulse,
+    startingTopic,
+    setStartingTopic,
   ] = useState(false)
 
   const [
-    endingPulse,
-    setEndingPulse,
+    endingTopic,
+    setEndingTopic,
   ] = useState(false)
 
   const [
-    topic,
-    setTopic,
+    topicInput,
+    setTopicInput,
   ] = useState("")
 
   const [
@@ -356,15 +380,15 @@ export default function AdminSessionPage() {
   )
 
   const [
-    roundCounts,
-    setRoundCounts,
+    topicCounts,
+    setTopicCounts,
   ] = useState<SignalCounts>(
     createEmptyCounts
   )
 
   const [
-    roundSnapshots,
-    setRoundSnapshots,
+    topicSnapshots,
+    setTopicSnapshots,
   ] = useState<Snapshot[]>([])
 
   const sessionRef =
@@ -377,15 +401,15 @@ export default function AdminSessionPage() {
       createInitialLiveStats()
     )
 
-  const roundCountsRef =
+  const topicCountsRef =
     useRef<SignalCounts>(
       createEmptyCounts()
     )
 
-  const roundSnapshotsRef =
+  const topicSnapshotsRef =
     useRef<Snapshot[]>([])
 
-  const finishingPulseRef =
+  const finishingTopicRef =
     useRef(false)
 
   const loadedSnapshotsRef =
@@ -393,7 +417,7 @@ export default function AdminSessionPage() {
 
   /*
    * =========================================================
-   * KEEP CURRENT SESSION IN REF
+   * KEEP SESSION REF UPDATED
    * =========================================================
    */
 
@@ -413,7 +437,7 @@ export default function AdminSessionPage() {
       return
     }
 
-    const firestoreSessionRef =
+    const sessionReference =
       doc(
         db,
         "sessions",
@@ -422,12 +446,12 @@ export default function AdminSessionPage() {
 
     const unsubscribe =
       onSnapshot(
-        firestoreSessionRef,
+        sessionReference,
         (snapshot) => {
           if (!snapshot.exists()) {
             setSession(null)
             setError(
-              "This session could not be found."
+              "This classroom session could not be found."
             )
             setLoading(false)
             return
@@ -436,10 +460,18 @@ export default function AdminSessionPage() {
           const raw =
             snapshot.data() as FirestoreSessionData
 
+          const topicStatus: TopicStatus =
+            raw.roundStatus ===
+            "active"
+              ? "active"
+              : raw.roundStatus ===
+                  "completed"
+                ? "completed"
+                : "waiting"
+
           const nextSession:
             SessionView = {
-            id:
-              snapshot.id,
+            id: snapshot.id,
 
             title:
               typeof raw.title ===
@@ -475,30 +507,23 @@ export default function AdminSessionPage() {
             aiSummary:
               raw.aiSummary,
 
-            roundStatus:
-              raw.roundStatus ===
-              "active"
-                ? "active"
-                : raw.roundStatus ===
-                    "completed"
-                  ? "completed"
-                  : "waiting",
+            topicStatus,
 
-            currentRound:
+            currentTopicNumber:
               toNumber(
                 raw.currentRound
               ),
 
-            roundTopic:
+            currentTopic:
               typeof raw.roundTopic ===
               "string"
                 ? raw.roundTopic
                 : "",
 
-            roundStartedAt:
+            topicStartedAt:
               raw.roundStartedAt,
 
-            roundEndedAt:
+            topicEndedAt:
               raw.roundEndedAt,
 
             raw,
@@ -518,7 +543,7 @@ export default function AdminSessionPage() {
           )
 
           setError(
-            "Unable to load this session."
+            "Unable to load this classroom session."
           )
 
           setLoading(false)
@@ -530,7 +555,7 @@ export default function AdminSessionPage() {
 
   /*
    * =========================================================
-   * LOAD SAVED ROUND SNAPSHOTS
+   * LOAD SAVED TOPIC SNAPSHOTS
    * =========================================================
    */
 
@@ -548,7 +573,7 @@ export default function AdminSessionPage() {
     const loadSnapshots =
       async () => {
         try {
-          const snapshotRef =
+          const snapshotCollection =
             collection(
               db,
               "sessions",
@@ -558,99 +583,81 @@ export default function AdminSessionPage() {
 
           const snapshot =
             await getDocs(
-              snapshotRef
+              snapshotCollection
             )
 
           const snapshots =
             snapshot.docs
-              .map(
-                (
-                  snapshotDoc
-                ) => {
-                  const data =
-                    snapshotDoc.data()
+              .map((snapshotDoc) => {
+                const data =
+                  snapshotDoc.data()
 
-                  /*
-                   * IMPORTANT:
-                   *
-                   * Convert round with toNumber()
-                   * so Snapshot receives a guaranteed
-                   * number instead of undefined.
-                   */
-
-                  const round =
+                /*
+                 * IMPORTANT:
+                 * round is normalized into a
+                 * guaranteed number here.
+                 *
+                 * Internally it means topic number.
+                 */
+                return {
+                  round:
                     toNumber(
                       data.round
-                    )
+                    ),
 
-                  return {
-                    round,
+                  topic:
+                    typeof data.topic ===
+                    "string"
+                      ? data.topic.trim()
+                      : "",
 
-                    topic:
-                      typeof data.topic ===
-                      "string"
-                        ? data.topic
-                        : "",
+                  got_it:
+                    toNumber(
+                      data.got_it
+                    ),
 
-                    got_it:
-                      toNumber(
-                        data.got_it
-                      ),
+                  slightly_lost:
+                    toNumber(
+                      data.slightly_lost
+                    ),
 
-                    slightly_lost:
-                      toNumber(
-                        data.slightly_lost
-                      ),
+                  confused:
+                    toNumber(
+                      data.confused
+                    ),
 
-                    confused:
-                      toNumber(
-                        data.confused
-                      ),
+                  interesting:
+                    toNumber(
+                      data.interesting
+                    ),
 
-                    interesting:
-                      toNumber(
-                        data.interesting
-                      ),
-
-                    total:
-                      toNumber(
-                        data.total
-                      ),
-                  } satisfies Snapshot
-                }
-              )
-
-              /*
-               * Ignore invalid / legacy snapshots
-               * without a valid teaching round.
-               */
-
+                  total:
+                    toNumber(
+                      data.total
+                    ),
+                } satisfies Snapshot
+              })
               .filter(
                 (item) =>
-                  (item.round ?? 0) > 0
+                  item.round > 0 &&
+                  item.topic.length > 0
               )
-
-              /*
-               * TypeScript-safe sorting.
-               */
-
               .sort(
                 (a, b) =>
-                  (a.round ?? 0) -
-                  (b.round ?? 0)
+                  a.round - b.round
               )
 
-          roundSnapshotsRef.current =
+          topicSnapshotsRef.current =
             snapshots
 
-          setRoundSnapshots(
+          setTopicSnapshots(
             snapshots
           )
         } catch (
           snapshotError
         ) {
           console.error(
-            "Failed to load round snapshots:",
+            "Failed to load topic snapshots:",
             snapshotError
           )
         }
@@ -661,7 +668,7 @@ export default function AdminSessionPage() {
 
   /*
    * =========================================================
-   * LIVE FIRESTORE SIGNALS
+   * LIVE SIGNALS
    * =========================================================
    */
 
@@ -673,37 +680,18 @@ export default function AdminSessionPage() {
     const unsubscribe =
       subscribeToSessionSignals(
         sessionId,
-        (
-          signals: Signal[]
-        ) => {
+        (signals: Signal[]) => {
           const currentSession =
             sessionRef.current
 
           /*
-           * -----------------------------------------
            * ALL SESSION SIGNALS
-           * -----------------------------------------
            */
 
           const allCounts =
-            createEmptyCounts()
-
-          signals.forEach(
-            (
-              signal
-            ) => {
-              if (
-                Object.prototype.hasOwnProperty.call(
-                  allCounts,
-                  signal.signal
-                )
-              ) {
-                allCounts[
-                  signal.signal
-                ] += 1
-              }
-            }
-          )
+            getCountsForSignals(
+              signals
+            )
 
           const totalSignals =
             getTotalSignalCount(
@@ -716,77 +704,46 @@ export default function AdminSessionPage() {
             )
 
           /*
-           * -----------------------------------------
-           * CURRENT ROUND
-           * -----------------------------------------
+           * CURRENT TOPIC SIGNALS
            */
 
-          const currentRound =
-            currentSession?.currentRound ??
+          const currentTopicNumber =
+            currentSession
+              ?.currentTopicNumber ??
             0
 
-          const currentRoundSignals =
-            currentSession?.roundStatus ===
-              "active" &&
-            currentRound > 0
-              ? signals.filter(
-                  (
-                    signal
-                  ) =>
-                    (signal.round ?? 0) ===
-                    currentRound
+          const currentTopicSignals =
+            currentSession?.topicStatus ===
+              "active"
+              ? getSignalsForTopic(
+                  signals,
+                  currentTopicNumber
                 )
               : []
 
-          const currentRoundCounts =
-            createEmptyCounts()
-
-          currentRoundSignals.forEach(
-            (
-              signal
-            ) => {
-              if (
-                Object.prototype.hasOwnProperty.call(
-                  currentRoundCounts,
-                  signal.signal
-                )
-              ) {
-                currentRoundCounts[
-                  signal.signal
-                ] += 1
-              }
-            }
-          )
-
-          /*
-           * -----------------------------------------
-           * CURRENT ROUND STUDENTS
-           * -----------------------------------------
-           */
-
-          const currentRoundStudents =
-            getUniqueStudentCount(
-              currentRoundSignals
+          const currentTopicCounts =
+            getCountsForSignals(
+              currentTopicSignals
             )
 
-          /*
-           * -----------------------------------------
-           * UPDATE LIVE UI
-           * -----------------------------------------
-           */
+          const currentTopicStudents =
+            getUniqueStudentCount(
+              currentTopicSignals
+            )
 
           const nextStats:
-            LiveSignalStats =
-            {
-              counts:
-                allCounts,
+            LiveSignalStats = {
+            counts:
+              allCounts,
 
-              total:
-                totalSignals,
+            total:
+              totalSignals,
 
-              uniqueStudents:
-                totalStudents,
-            }
+            uniqueStudents:
+              totalStudents,
+
+            signals,
+          }
 
           liveStatsRef.current =
             nextStats
@@ -796,36 +753,32 @@ export default function AdminSessionPage() {
           )
 
           if (
-            currentSession?.roundStatus ===
+            currentSession?.topicStatus ===
             "active"
           ) {
-            roundCountsRef.current =
-              currentRoundCounts
+            topicCountsRef.current =
+              currentTopicCounts
 
-            setRoundCounts(
-              currentRoundCounts
+            setTopicCounts(
+              currentTopicCounts
             )
           } else {
             const emptyCounts =
               createEmptyCounts()
 
-            roundCountsRef.current =
+            topicCountsRef.current =
               emptyCounts
 
-            setRoundCounts(
+            setTopicCounts(
               emptyCounts
             )
           }
 
           /*
-           * -----------------------------------------
            * KEEP SESSION AGGREGATES UPDATED
-           * -----------------------------------------
            */
 
-          if (
-            currentSession
-          ) {
+          if (currentSession) {
             void updateDoc(
               doc(
                 db,
@@ -840,9 +793,7 @@ export default function AdminSessionPage() {
                   totalSignals,
               }
             ).catch(
-              (
-                updateError
-              ) => {
+              (updateError) => {
                 console.error(
                   "Failed to update session aggregates:",
                   updateError
@@ -854,26 +805,17 @@ export default function AdminSessionPage() {
           console.debug(
             "PulseBoard live signals:",
             {
-              allSignals:
-                totalSignals,
-
-              allStudents:
-                totalStudents,
-
-              currentRound,
-
-              currentRoundSignals:
-                currentRoundSignals.length,
-
-              currentRoundStudents,
-
-              currentRoundCounts,
+              totalSignals,
+              totalStudents,
+              currentTopicNumber,
+              currentTopicSignals:
+                currentTopicSignals.length,
+              currentTopicStudents,
+              currentTopicCounts,
             }
           )
         },
-        (
-          signalError
-        ) => {
+        (signalError) => {
           console.error(
             "Signal subscription failed:",
             signalError
@@ -890,11 +832,11 @@ export default function AdminSessionPage() {
 
   /*
    * =========================================================
-   * SAVE CURRENT ROUND SNAPSHOT
+   * SAVE CURRENT TOPIC SNAPSHOT
    * =========================================================
    */
 
-  const persistRoundSnapshot =
+  const persistTopicSnapshot =
     useCallback(
       async (
         force = false
@@ -909,78 +851,78 @@ export default function AdminSessionPage() {
           return null
         }
 
-        const currentRound =
-          currentSession.currentRound
+        const topicNumber =
+          currentSession.currentTopicNumber
 
         if (
-          currentRound <= 0
+          topicNumber <= 0
         ) {
           return null
         }
 
         const currentTopic =
-          currentSession.roundTopic.trim()
+          currentSession.currentTopic.trim()
 
         if (!currentTopic) {
           return null
         }
 
         const counts =
-          roundCountsRef.current
+          topicCountsRef.current
 
-        const totalSignals =
+        const total =
           getTotalSignalCount(
             counts
           )
 
         if (
           !force &&
-          totalSignals === 0
+          total === 0
         ) {
           return null
         }
 
-        /*
-         * Prevent duplicate snapshots.
-         */
-
-        const existingSnapshot =
-          roundSnapshotsRef.current.find(
-            (
-              snapshot
-            ) =>
-              (snapshot.round ?? 0) ===
-              currentRound
+        const alreadySaved =
+          topicSnapshotsRef.current.find(
+            (snapshot) =>
+              snapshot.round ===
+              topicNumber
           )
 
-        if (
-          existingSnapshot
-        ) {
-          return existingSnapshot
+        if (alreadySaved) {
+          return alreadySaved
         }
 
         /*
-         * Prefer current-round students.
-         *
-         * If there are no current-round
-         * students, fall back to session total.
+         * Calculate students from actual
+         * current-topic signals.
          */
 
-        const currentRoundStudents =
-          liveStatsRef.current
-            .uniqueStudents
+        const currentTopicSignals =
+          getSignalsForTopic(
+            liveStatsRef.current
+              .signals,
+            topicNumber
+          )
+
+        const currentTopicStudents =
+          getUniqueStudentCount(
+            currentTopicSignals
+          )
 
         const totalStudents =
-          currentRoundStudents > 0
-            ? currentRoundStudents
+          currentTopicStudents > 0
+            ? currentTopicStudents
             : Math.max(
-                currentSession.participantCount,
-                0
+                liveStatsRef.current
+                  .uniqueStudents,
+                currentSession
+                  .participantCount
               )
 
         const snapshot =
           createSnapshot(
-            currentRound,
+            topicNumber,
             currentTopic,
             counts,
             totalStudents
@@ -996,6 +938,14 @@ export default function AdminSessionPage() {
           {
             ...snapshot,
 
+            /*
+             * Store an explicit topicNumber too.
+             * This makes the new structure clearer
+             * while preserving the existing round field
+             * for compatibility.
+             */
+            topicNumber,
+
             createdAt:
               serverTimestamp(),
           }
@@ -1003,18 +953,17 @@ export default function AdminSessionPage() {
 
         const nextSnapshots =
           [
-            ...roundSnapshotsRef.current,
+            ...topicSnapshotsRef.current,
             snapshot,
           ].sort(
             (a, b) =>
-              (a.round ?? 0) -
-              (b.round ?? 0)
+              a.round - b.round
           )
 
-        roundSnapshotsRef.current =
+        topicSnapshotsRef.current =
           nextSnapshots
 
-        setRoundSnapshots(
+        setTopicSnapshots(
           nextSnapshots
         )
 
@@ -1025,25 +974,25 @@ export default function AdminSessionPage() {
 
   /*
    * =========================================================
-   * START PULSE
+   * START TOPIC
    * =========================================================
    */
 
-  const handleStartPulse =
+  const handleStartTopic =
     useCallback(
       async () => {
         const currentSession =
           sessionRef.current
 
         const cleanTopic =
-          topic.trim()
+          topicInput.trim()
 
         if (
           !currentSession ||
-          startingPulse ||
+          startingTopic ||
           currentSession.status !==
             "active" ||
-          currentSession.roundStatus ===
+          currentSession.topicStatus ===
             "active"
         ) {
           return
@@ -1051,7 +1000,7 @@ export default function AdminSessionPage() {
 
         if (!cleanTopic) {
           setError(
-            "Enter a teaching topic before starting the pulse."
+            "Enter a teaching topic before starting."
           )
 
           return
@@ -1068,29 +1017,29 @@ export default function AdminSessionPage() {
         }
 
         try {
-          setStartingPulse(
+          setStartingTopic(
             true
           )
 
           setError(null)
 
+          const nextTopicNumber =
+            currentSession.currentTopicNumber +
+            1
+
           /*
-           * Reset current-round counters.
+           * Fresh counters for the new topic.
            */
 
           const emptyCounts =
             createEmptyCounts()
 
-          roundCountsRef.current =
+          topicCountsRef.current =
             emptyCounts
 
-          setRoundCounts(
+          setTopicCounts(
             emptyCounts
           )
-
-          const nextRound =
-            currentSession.currentRound +
-            1
 
           await updateDoc(
             doc(
@@ -1099,12 +1048,28 @@ export default function AdminSessionPage() {
               currentSession.id
             ),
             {
+              /*
+               * roundStatus is retained internally
+               * for backwards compatibility.
+               */
               roundStatus:
                 "active",
 
+              /*
+               * Internally this number represents
+               * the topic sequence:
+               *
+               * 1 = Topic 1
+               * 2 = Topic 2
+               * 3 = Topic 3
+               */
               currentRound:
-                nextRound,
+                nextTopicNumber,
 
+              /*
+               * This is the actual faculty-entered
+               * teaching topic.
+               */
               roundTopic:
                 cleanTopic,
 
@@ -1116,37 +1081,37 @@ export default function AdminSessionPage() {
             }
           )
 
-          setTopic("")
+          setTopicInput("")
         } catch (
           startError
         ) {
           console.error(
-            "Failed to start pulse:",
+            "Failed to start topic:",
             startError
           )
 
           setError(
-            "Unable to start the pulse. Please try again."
+            "Unable to start the topic. Please try again."
           )
         } finally {
-          setStartingPulse(
+          setStartingTopic(
             false
           )
         }
       },
       [
-        topic,
-        startingPulse,
+        topicInput,
+        startingTopic,
       ]
     )
 
   /*
    * =========================================================
-   * FINISH PULSE
+   * END CURRENT TOPIC
    * =========================================================
    */
 
-  const handleFinishPulse =
+  const handleEndTopic =
     useCallback(
       async () => {
         const currentSession =
@@ -1154,27 +1119,31 @@ export default function AdminSessionPage() {
 
         if (
           !currentSession ||
-          endingPulse ||
-          finishingPulseRef.current ||
+          endingTopic ||
+          finishingTopicRef.current ||
           currentSession.status !==
             "active" ||
-          currentSession.roundStatus !==
+          currentSession.topicStatus !==
             "active"
         ) {
           return
         }
 
-        finishingPulseRef.current =
+        finishingTopicRef.current =
           true
 
         try {
-          setEndingPulse(
+          setEndingTopic(
             true
           )
 
           setError(null)
 
-          await persistRoundSnapshot(
+          /*
+           * Always save the current topic
+           * before marking it completed.
+           */
+          await persistTopicSnapshot(
             true
           )
 
@@ -1193,38 +1162,45 @@ export default function AdminSessionPage() {
             }
           )
 
+          /*
+           * Clear only the live counters.
+           *
+           * The topic name remains in Firestore
+           * and inside topic history.
+           */
+
           const emptyCounts =
             createEmptyCounts()
 
-          roundCountsRef.current =
+          topicCountsRef.current =
             emptyCounts
 
-          setRoundCounts(
+          setTopicCounts(
             emptyCounts
           )
         } catch (
           finishError
         ) {
           console.error(
-            "Failed to finish pulse:",
+            "Failed to end topic:",
             finishError
           )
 
           setError(
-            "Unable to complete this pulse. Please try again."
+            "Unable to complete this topic. Please try again."
           )
         } finally {
-          finishingPulseRef.current =
+          finishingTopicRef.current =
             false
 
-          setEndingPulse(
+          setEndingTopic(
             false
           )
         }
       },
       [
-        endingPulse,
-        persistRoundSnapshot,
+        endingTopic,
+        persistTopicSnapshot,
       ]
     )
 
@@ -1249,7 +1225,7 @@ export default function AdminSessionPage() {
 
         const confirmed =
           window.confirm(
-            "End this classroom session? The current pulse will be saved and the AI teaching report will be generated."
+            "End this classroom session? The current topic will be saved and the AI teaching report will be generated."
           )
 
         if (!confirmed) {
@@ -1261,14 +1237,14 @@ export default function AdminSessionPage() {
           setError(null)
 
           /*
-           * Save current pulse first.
+           * If a topic is currently active,
+           * save and close it first.
            */
-
           if (
-            currentSession.roundStatus ===
+            currentSession.topicStatus ===
             "active"
           ) {
-            await persistRoundSnapshot(
+            await persistTopicSnapshot(
               true
             )
 
@@ -1289,16 +1265,14 @@ export default function AdminSessionPage() {
           }
 
           /*
-           * Use latest snapshot list.
+           * Use the latest in-memory snapshot list.
            */
-
           const snapshots =
             [
-              ...roundSnapshotsRef.current,
+              ...topicSnapshotsRef.current,
             ].sort(
               (a, b) =>
-                (a.round ?? 0) -
-                (b.round ?? 0)
+                a.round - b.round
             )
 
           let aiSummary = ""
@@ -1361,7 +1335,7 @@ export default function AdminSessionPage() {
           )
 
           setError(
-            "Unable to end the session. Please try again."
+            "Unable to end the classroom session. Please try again."
           )
         } finally {
           setEnding(false)
@@ -1369,7 +1343,7 @@ export default function AdminSessionPage() {
       },
       [
         ending,
-        persistRoundSnapshot,
+        persistTopicSnapshot,
       ]
     )
 
@@ -1383,10 +1357,10 @@ export default function AdminSessionPage() {
     session?.status ===
     "active"
 
-  const isPulseActive =
+  const isTopicActive =
     Boolean(
       isActive &&
-        session?.roundStatus ===
+        session?.topicStatus ===
           "active"
     )
 
@@ -1396,18 +1370,17 @@ export default function AdminSessionPage() {
   const totalSignals =
     liveStats.total
 
-  const currentPulseTotal =
+  const currentTopicTotal =
     getTotalSignalCount(
-      roundCounts
+      topicCounts
     )
 
   const confusionRate =
-    currentPulseTotal >
-    0
+    currentTopicTotal > 0
       ? Math.round(
-          ((roundCounts.confused +
-            roundCounts.slightly_lost) /
-            currentPulseTotal) *
+          ((topicCounts.confused +
+            topicCounts.slightly_lost) /
+            currentTopicTotal) *
             100
         )
       : 0
@@ -1495,7 +1468,9 @@ export default function AdminSessionPage() {
     <main className="app-shell min-h-screen">
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
 
-        {/* TOP BAR */}
+        {/* ===================================================
+            TOP BAR
+        =================================================== */}
 
         <header className="flex items-center justify-between gap-3">
           <button
@@ -1524,7 +1499,9 @@ export default function AdminSessionPage() {
           </div>
         </header>
 
-        {/* HERO */}
+        {/* ===================================================
+            HERO
+        =================================================== */}
 
         <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-violet-400/10 bg-linear-to-br from-violet-600/[0.14] via-(--surface) to-indigo-600/[0.10] p-6 shadow-(--shadow-lg) sm:p-8 lg:p-10">
           <div
@@ -1539,7 +1516,9 @@ export default function AdminSessionPage() {
 
           <div className="relative flex flex-col gap-7 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex-1">
+
               <div className="flex flex-wrap items-center gap-2">
+
                 <span
                   className={[
                     "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em]",
@@ -1567,15 +1546,17 @@ export default function AdminSessionPage() {
                     "COURSE"}
                 </span>
 
-                {isPulseActive && (
+                {isTopicActive && (
                   <span className="rounded-full border border-indigo-400/10 bg-indigo-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-indigo-300">
-                    Round{" "}
+                    Topic{" "}
                     {
-                      currentSession.currentRound
+                      currentSession.currentTopicNumber
                     }
                   </span>
                 )}
               </div>
+
+              {/* SESSION TITLE — NOT TOPIC */}
 
               <h1 className="mt-5 max-w-4xl text-3xl font-black tracking-[-0.04em] sm:text-4xl lg:text-5xl">
                 {currentSession.title}
@@ -1583,12 +1564,12 @@ export default function AdminSessionPage() {
 
               <p className="mt-4 max-w-2xl text-sm leading-7 text-(--foreground-muted) sm:text-base">
                 {isActive
-                  ? isPulseActive
-                    ? `Students are responding to “${currentSession.roundTopic}”.`
-                    : currentSession.currentRound ===
+                  ? isTopicActive
+                    ? `Students are responding to “${currentSession.currentTopic}”.`
+                    : currentSession.currentTopicNumber ===
                         0
-                      ? "Your classroom is ready. Enter the first teaching topic and manually start the pulse when you are ready."
-                      : "The previous pulse is complete. Enter the next teaching topic and manually start another pulse."
+                      ? "Your classroom is ready. Enter the first teaching topic and start it when you are ready."
+                      : "The previous topic is complete. Enter the next teaching topic and start it when you are ready."
                   : "This classroom session has ended. Your collected feedback and AI teaching analysis are preserved."}
               </p>
 
@@ -1607,13 +1588,13 @@ export default function AdminSessionPage() {
                   label={`${totalSignals} signals`}
                 />
 
-                {isPulseActive && (
+                {isTopicActive && (
                   <InfoChip
                     icon={
                       <Zap className="h-3.5 w-3.5" />
                     }
                     label={
-                      currentSession.roundTopic
+                      currentSession.currentTopic
                     }
                   />
                 )}
@@ -1639,7 +1620,9 @@ export default function AdminSessionPage() {
           </div>
         </section>
 
-        {/* ERROR */}
+        {/* ===================================================
+            ERROR
+        =================================================== */}
 
         {error && (
           <div className="mt-5 flex items-start gap-3 rounded-2xl border border-rose-500/15 bg-rose-500/[0.06] px-4 py-3">
@@ -1651,12 +1634,14 @@ export default function AdminSessionPage() {
           </div>
         )}
 
-        {/* CONTROL CENTER */}
+        {/* ===================================================
+            CONTROL CENTER
+        =================================================== */}
 
         {isActive && (
           <section className="mt-6 grid gap-6 xl:grid-cols-[500px_minmax(0,1fr)]">
 
-            {/* QR ACCESS */}
+            {/* QR */}
 
             <div className="min-w-0">
               <SessionQRCode
@@ -1689,50 +1674,59 @@ export default function AdminSessionPage() {
               </div>
             </div>
 
-            {/* ROUND CONTROL */}
+            {/* TOPIC CONTROL */}
 
             <div className="relative min-w-0 overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6 sm:p-7">
+
               <div
                 aria-hidden="true"
                 className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-violet-500/10 blur-3xl"
               />
 
               <div className="relative z-10">
+
                 <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+
                   <div className="min-w-0">
+
                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
-                      Teaching pulse
+                      Teaching topic
                     </p>
 
                     <h2 className="mt-2 text-2xl font-black tracking-tight">
-                      {isPulseActive
-                        ? currentSession.roundTopic
-                        : currentSession.currentRound ===
+                      {isTopicActive
+                        ? currentSession.currentTopic
+                        : currentSession.currentTopicNumber ===
                             0
                           ? "Start your first topic"
                           : "Ready for the next topic"}
                     </h2>
 
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-(--foreground-muted)">
-                      {isPulseActive
-                        ? "Students can respond to the current teaching topic right now."
-                        : "Each pulse is manually started by you. Nothing begins automatically."}
+                      {isTopicActive
+                        ? "Students can respond to this teaching topic right now."
+                        : "Type the concept you are teaching, then manually start the topic."}
                     </p>
                   </div>
 
-                  {isPulseActive ? (
+                  {isTopicActive ? (
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
+
                       <div className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 px-4 py-2.5">
                         <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
 
                         <div>
                           <p className="text-[9px] font-black uppercase tracking-wider text-emerald-300">
-                            Live now
+                            Topic{" "}
+                            {
+                              currentSession.currentTopicNumber
+                            }{" "}
+                            live
                           </p>
 
                           <p className="max-w-52 truncate text-sm font-black text-(--foreground)">
                             {
-                              currentSession.roundTopic
+                              currentSession.currentTopic
                             }
                           </p>
                         </div>
@@ -1741,63 +1735,67 @@ export default function AdminSessionPage() {
                       <button
                         type="button"
                         onClick={
-                          handleFinishPulse
+                          handleEndTopic
                         }
                         disabled={
-                          endingPulse
+                          endingTopic
                         }
                         className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 text-xs font-black text-amber-300 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Check className="h-4 w-4" />
 
-                        {endingPulse
+                        {endingTopic
                           ? "Saving..."
-                          : "End Pulse"}
+                          : "End Topic"}
                       </button>
                     </div>
                   ) : (
                     <button
                       type="button"
                       disabled={
-                        startingPulse ||
-                        !topic.trim()
+                        startingTopic ||
+                        !topicInput.trim()
                       }
                       onClick={
-                        handleStartPulse
+                        handleStartTopic
                       }
                       className="group inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-2xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 text-xs font-black text-white shadow-lg shadow-violet-500/20 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Radio className="h-4 w-4" />
 
-                      {startingPulse
+                      {startingTopic
                         ? "Starting..."
-                        : currentSession.currentRound ===
+                        : currentSession.currentTopicNumber ===
                             0
-                          ? "Start Pulse"
-                          : "Start Next Pulse"}
+                          ? "Start Topic"
+                          : "Start Next Topic"}
 
                       <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                     </button>
                   )}
                 </div>
 
-                {!isPulseActive && (
+                {!isTopicActive && (
                   <div className="mt-7">
+
                     <label
-                      htmlFor="pulse-topic"
+                      htmlFor="teaching-topic"
                       className="mb-2 block text-[10px] font-black uppercase tracking-[0.18em] text-(--foreground-muted)"
                     >
-                      Teaching topic
+                      Topic name
                     </label>
 
                     <div className="relative">
+
                       <input
-                        id="pulse-topic"
-                        value={topic}
+                        id="teaching-topic"
+                        value={
+                          topicInput
+                        }
                         onChange={(
                           event
                         ) => {
-                          setTopic(
+                          setTopicInput(
                             event.target.value
                           )
 
@@ -1820,9 +1818,9 @@ export default function AdminSessionPage() {
                             event.preventDefault()
 
                             if (
-                              topic.trim()
+                              topicInput.trim()
                             ) {
-                              void handleStartPulse()
+                              void handleStartTopic()
                             }
                           }
                         }}
@@ -1832,37 +1830,44 @@ export default function AdminSessionPage() {
                       />
 
                       <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 rounded-lg bg-(--surface) px-2 py-1 text-[9px] font-bold text-(--foreground-subtle)">
-                        {topic.length}
+                        {topicInput.length}
                         /120
                       </span>
                     </div>
 
                     <div className="mt-3 flex items-start gap-2">
+
                       <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-300" />
 
                       <p className="text-[10px] leading-5 text-(--foreground-subtle)">
                         Enter the exact concept you are teaching.
-                        The pulse starts only when you press Start Pulse.
+                        Students can respond only after you start the topic.
                       </p>
                     </div>
                   </div>
                 )}
 
-                {isPulseActive && (
+                {isTopicActive && (
                   <div className="mt-6 rounded-2xl border border-violet-400/10 bg-violet-500/5 p-4">
+
                     <div className="flex items-center gap-3">
+
                       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
                         <Lightbulb className="h-5 w-5" />
                       </div>
 
                       <div className="min-w-0">
+
                         <p className="text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
-                          Current teaching topic
+                          Topic{" "}
+                          {
+                            currentSession.currentTopicNumber
+                          }
                         </p>
 
                         <p className="mt-1 truncate text-sm font-black">
                           {
-                            currentSession.roundTopic
+                            currentSession.currentTopic
                           }
                         </p>
                       </div>
@@ -1870,43 +1875,46 @@ export default function AdminSessionPage() {
                   </div>
                 )}
 
+                {/* TOPIC STATUS */}
+
                 <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                  <RoundStatusCard
+
+                  <TopicStatusCard
                     active={
-                      currentSession.roundStatus ===
+                      currentSession.topicStatus ===
                       "waiting"
                     }
                     label="Waiting"
                     value={
-                      currentSession.roundStatus ===
+                      currentSession.topicStatus ===
                       "waiting"
                         ? "Ready"
                         : "Idle"
                     }
                   />
 
-                  <RoundStatusCard
+                  <TopicStatusCard
                     active={
-                      currentSession.roundStatus ===
+                      currentSession.topicStatus ===
                       "active"
                     }
-                    label="Active"
+                    label="Live"
                     value={
-                      currentSession.roundStatus ===
+                      currentSession.topicStatus ===
                       "active"
-                        ? `Round ${currentSession.currentRound}`
+                        ? `Topic ${currentSession.currentTopicNumber}`
                         : "Idle"
                     }
                   />
 
-                  <RoundStatusCard
+                  <TopicStatusCard
                     active={
-                      currentSession.roundStatus ===
+                      currentSession.topicStatus ===
                       "completed"
                     }
                     label="Completed"
                     value={
-                      currentSession.roundStatus ===
+                      currentSession.topicStatus ===
                       "completed"
                         ? "Saved"
                         : "Waiting"
@@ -1918,9 +1926,12 @@ export default function AdminSessionPage() {
           </section>
         )}
 
-        {/* METRICS */}
+        {/* ===================================================
+            METRICS
+        =================================================== */}
 
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+
           <MetricCard
             icon={
               <Users className="h-5 w-5" />
@@ -1949,14 +1960,14 @@ export default function AdminSessionPage() {
             icon={
               <CheckCircle2 className="h-5 w-5" />
             }
-            label="Current pulse"
+            label="Topics"
             value={
-              currentSession.currentRound
+              currentSession.currentTopicNumber
             }
             description={
-              isPulseActive
-                ? "Live and collecting responses"
-                : "Waiting for faculty"
+              isTopicActive
+                ? "Currently collecting responses"
+                : "Topics completed or ready"
             }
             tone="emerald"
           />
@@ -1980,94 +1991,107 @@ export default function AdminSessionPage() {
           />
         </section>
 
-        {/* LIVE PULSE + AI */}
+        {/* ===================================================
+            LIVE TOPIC + AI
+        =================================================== */}
 
         <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_370px]">
 
-          {/* LIVE */}
+          {/* LIVE TOPIC */}
 
           <div className="surface overflow-hidden rounded-[2rem] p-6 sm:p-7">
+
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+
               <div>
+
                 <div className="flex items-center gap-2">
+
                   <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
                     <Radio className="h-4 w-4" />
                   </span>
 
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
-                    Classroom pulse
+                    Classroom feedback
                   </p>
                 </div>
 
                 <h2 className="mt-3 text-2xl font-black tracking-tight">
-                  {isPulseActive
-                    ? currentSession.roundTopic
+
+                  {isTopicActive
+                    ? currentSession.currentTopic
                     : "Waiting for the next topic"}
+
                 </h2>
 
                 <p className="mt-1 text-sm leading-6 text-(--foreground-muted)">
-                  {isPulseActive
-                    ? "Live responses from the current teaching topic."
-                    : "The next topic will appear here when you manually start another pulse."}
+                  {isTopicActive
+                    ? `Live responses for Topic ${currentSession.currentTopicNumber}.`
+                    : "The next topic will appear here when you start it."}
                 </p>
               </div>
 
               <div className="rounded-2xl border border-violet-400/10 bg-violet-500/5 px-4 py-3 text-center">
+
                 <p className="text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
                   Responses
                 </p>
 
                 <p className="mt-1 text-2xl font-black">
                   {
-                    currentPulseTotal
+                    currentTopicTotal
                   }
                 </p>
               </div>
             </div>
 
             <div className="mt-7 grid gap-3 sm:grid-cols-2">
+
               <LiveSignalCard
                 signal="got_it"
                 count={
-                  roundCounts.got_it
+                  topicCounts.got_it
                 }
                 total={
-                  currentPulseTotal
+                  currentTopicTotal
                 }
               />
 
               <LiveSignalCard
                 signal="slightly_lost"
                 count={
-                  roundCounts.slightly_lost
+                  topicCounts.slightly_lost
                 }
                 total={
-                  currentPulseTotal
+                  currentTopicTotal
                 }
               />
 
               <LiveSignalCard
                 signal="confused"
                 count={
-                  roundCounts.confused
+                  topicCounts.confused
                 }
                 total={
-                  currentPulseTotal
+                  currentTopicTotal
                 }
               />
 
               <LiveSignalCard
                 signal="interesting"
                 count={
-                  roundCounts.interesting
+                  topicCounts.interesting
                 }
                 total={
-                  currentPulseTotal
+                  currentTopicTotal
                 }
               />
             </div>
 
+            {/* CONFUSION */}
+
             <div className="relative mt-5 overflow-hidden rounded-2xl border border-(--border) bg-(--background-soft) p-5">
+
               <div
                 aria-hidden="true"
                 className={[
@@ -2083,7 +2107,9 @@ export default function AdminSessionPage() {
               />
 
               <div className="relative z-10 flex items-center justify-between gap-4">
+
                 <div>
+
                   <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-muted)">
                     Current confusion rate
                   </p>
@@ -2091,8 +2117,7 @@ export default function AdminSessionPage() {
                   <p className="mt-2 text-4xl font-black">
                     {
                       confusionRate
-                    }
-                    %
+                    }%
                   </p>
                 </div>
 
@@ -2119,20 +2144,22 @@ export default function AdminSessionPage() {
               </div>
 
               <p className="relative z-10 mt-3 max-w-xl text-xs leading-5 text-(--foreground-muted)">
-                Combines Slightly lost and Confused responses from
-                the current teaching topic.
+                Combines Slightly lost and Confused responses from the current teaching topic.
               </p>
             </div>
 
-            {!isPulseActive &&
+            {/* WAITING STATE */}
+
+            {!isTopicActive &&
               isActive && (
                 <div className="mt-5 rounded-[2rem] border border-dashed border-(--border-strong) bg-(--background-soft) px-6 py-12 text-center">
+
                   <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl border border-violet-400/10 bg-violet-500/10 text-violet-300">
                     <Sparkles className="h-6 w-6" />
                   </div>
 
                   <p className="mt-5 text-[10px] font-black uppercase tracking-[0.18em] text-violet-400">
-                    Next teaching segment
+                    Next teaching topic
                   </p>
 
                   <h3 className="mt-2 text-lg font-black">
@@ -2140,8 +2167,7 @@ export default function AdminSessionPage() {
                   </h3>
 
                   <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-(--foreground-muted)">
-                    Enter the next concept above and manually start
-                    a new PulseBoard pulse.
+                    Enter the next concept above and manually start it.
                   </p>
                 </div>
               )}
@@ -2150,12 +2176,14 @@ export default function AdminSessionPage() {
           {/* AI */}
 
           <aside className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6">
+
             <div
               aria-hidden="true"
               className="pointer-events-none absolute -right-16 -top-16 h-44 w-44 rounded-full bg-violet-500/10 blur-3xl"
             />
 
             <div className="relative z-10">
+
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
                 <Sparkles className="h-5 w-5" />
               </div>
@@ -2169,12 +2197,12 @@ export default function AdminSessionPage() {
               </h2>
 
               <p className="mt-2 text-sm leading-6 text-(--foreground-muted)">
-                Your teaching report turns real classroom feedback
-                into practical next steps.
+                Your teaching report turns real classroom feedback into practical next steps.
               </p>
 
               {aiSummaryText ? (
                 <div className="mt-6 max-h-[420px] overflow-auto rounded-2xl border border-(--border) bg-(--background-soft) p-4">
+
                   <p className="whitespace-pre-wrap text-sm leading-7 text-(--foreground-secondary)">
                     {
                       aiSummaryText
@@ -2183,6 +2211,7 @@ export default function AdminSessionPage() {
                 </div>
               ) : (
                 <div className="mt-6 rounded-2xl border border-dashed border-(--border-strong) bg-(--background-soft) p-5">
+
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
                     <Sparkles className="h-5 w-5" />
                   </div>
@@ -2192,18 +2221,17 @@ export default function AdminSessionPage() {
                   </p>
 
                   <p className="mt-2 text-sm leading-6 text-(--foreground-muted)">
-                    End the classroom session after your teaching
-                    pulses are complete. PulseBoard will then generate
-                    a teaching-focused report.
+                    End the classroom session after your teaching topics are complete. PulseBoard will then generate a teaching-focused report.
                   </p>
                 </div>
               )}
 
               <div className="mt-5 grid grid-cols-2 gap-2">
+
                 <MiniInfo
                   label="Topics recorded"
                   value={String(
-                    roundSnapshots.length
+                    topicSnapshots.length
                   )}
                 />
 
@@ -2218,15 +2246,151 @@ export default function AdminSessionPage() {
           </aside>
         </section>
 
-        {/* SESSION DETAILS */}
+        {/* ===================================================
+            TOPIC HISTORY
+        =================================================== */}
+
+        {topicSnapshots.length > 0 && (
+          <section className="surface mt-6 overflow-hidden rounded-[2rem] p-6 sm:p-7">
+
+            <div className="flex items-center gap-3">
+
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
+                <Lightbulb className="h-5 w-5" />
+              </div>
+
+              <div>
+
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
+                  Teaching history
+                </p>
+
+                <h2 className="mt-1 text-xl font-black">
+                  Topics recorded
+                </h2>
+              </div>
+            </div>
+
+            <div className="mt-6 space-y-3">
+
+              {[...topicSnapshots]
+                .sort(
+                  (a, b) =>
+                    a.round -
+                    b.round
+                )
+                .map(
+                  (
+                    snapshot
+                  ) => {
+                    const snapshotTotal =
+                      snapshot.got_it +
+                      snapshot.slightly_lost +
+                      snapshot.confused +
+                      snapshot.interesting
+
+                    const snapshotConfusion =
+                      snapshotTotal >
+                      0
+                        ? Math.round(
+                            ((snapshot.confused +
+                              snapshot.slightly_lost) /
+                              snapshotTotal) *
+                              100
+                          )
+                        : 0
+
+                    return (
+                      <div
+                        key={`topic-${snapshot.round}`}
+                        className="rounded-2xl border border-(--border) bg-(--background-soft) p-4"
+                      >
+
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+
+                          <div className="min-w-0">
+
+                            <div className="flex items-center gap-2">
+
+                              <span className="shrink-0 rounded-full border border-violet-400/10 bg-violet-500/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-violet-300">
+                                Topic{" "}
+                                {
+                                  snapshot.round
+                                }
+                              </span>
+
+                              <span className="text-[9px] font-bold text-(--foreground-subtle)">
+                                {
+                                  snapshot.total
+                                } students
+                              </span>
+                            </div>
+
+                            <p className="mt-2 truncate text-sm font-black">
+                              {
+                                snapshot.topic
+                              }
+                            </p>
+                          </div>
+
+                          <div className="flex shrink-0 flex-wrap items-center gap-2 text-[10px]">
+
+                            <HistoryStat
+                              label="Got it"
+                              value={
+                                snapshot.got_it
+                              }
+                            />
+
+                            <HistoryStat
+                              label="Lost"
+                              value={
+                                snapshot.slightly_lost
+                              }
+                            />
+
+                            <HistoryStat
+                              label="Confused"
+                              value={
+                                snapshot.confused
+                              }
+                            />
+
+                            <HistoryStat
+                              label="Interesting"
+                              value={
+                                snapshot.interesting
+                              }
+                            />
+
+                            <HistoryStat
+                              label="Confusion"
+                              value={`${snapshotConfusion}%`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }
+                )}
+            </div>
+          </section>
+        )}
+
+        {/* ===================================================
+            SESSION DETAILS
+        =================================================== */}
 
         <section className="surface mt-6 overflow-hidden rounded-[2rem] p-6">
+
           <div className="flex items-center gap-3">
+
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
               <Radio className="h-5 w-5" />
             </div>
 
             <div>
+
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
                 Session details
               </p>
@@ -2238,6 +2402,14 @@ export default function AdminSessionPage() {
           </div>
 
           <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+
+            <DetailBox
+              label="Session"
+              value={
+                currentSession.title
+              }
+            />
+
             <DetailBox
               label="Course"
               value={
@@ -2255,16 +2427,9 @@ export default function AdminSessionPage() {
             <DetailBox
               label="Current topic"
               value={
-                currentSession.roundTopic ||
+                currentSession.currentTopic ||
                 "Waiting"
               }
-            />
-
-            <DetailBox
-              label="Current round"
-              value={String(
-                currentSession.currentRound
-              )}
             />
           </div>
         </section>
@@ -2308,6 +2473,7 @@ function MiniInfo({
 }) {
   return (
     <div className="rounded-2xl border border-(--border) bg-(--background-soft) px-3.5 py-3">
+
       <p className="text-[8px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
         {label}
       </p>
@@ -2319,7 +2485,7 @@ function MiniInfo({
   )
 }
 
-function RoundStatusCard({
+function TopicStatusCard({
   active,
   label,
   value,
@@ -2338,6 +2504,7 @@ function RoundStatusCard({
       ].join(" ")}
     >
       <div className="flex items-center justify-between gap-2">
+
         <p className="text-[9px] font-black uppercase tracking-wider text-(--foreground-subtle)">
           {label}
         </p>
@@ -2411,6 +2578,7 @@ function MetricCard({
 
   return (
     <div className="group surface relative overflow-hidden rounded-[2rem] p-5 transition-all duration-200 hover:-translate-y-1 hover:border-(--border-strong) hover:shadow-(--shadow-md)">
+
       <div
         aria-hidden="true"
         className={[
@@ -2420,7 +2588,9 @@ function MetricCard({
       />
 
       <div className="relative z-10 flex items-start justify-between gap-3">
+
         <div>
+
           <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-muted)">
             {label}
           </p>
@@ -2475,6 +2645,7 @@ function LiveSignalCard({
         meta.tone,
       ].join(" ")}
     >
+
       <div
         aria-hidden="true"
         className={[
@@ -2484,8 +2655,11 @@ function LiveSignalCard({
       />
 
       <div className="relative z-10">
+
         <div className="flex items-center justify-between gap-3">
+
           <div className="flex min-w-0 items-center gap-3">
+
             <div
               className={[
                 "flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl",
@@ -2496,12 +2670,13 @@ function LiveSignalCard({
             </div>
 
             <div className="min-w-0">
+
               <p className="truncate text-sm font-black">
                 {meta.label}
               </p>
 
               <p className="mt-1 text-[10px] text-(--foreground-muted)">
-                {percentage}% of pulse
+                {percentage}% of topic
               </p>
             </div>
           </div>
@@ -2512,6 +2687,7 @@ function LiveSignalCard({
         </div>
 
         <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-(--surface-hover)">
+
           <div
             className={[
               "h-full rounded-full bg-linear-to-r transition-[width] duration-500",
@@ -2528,6 +2704,23 @@ function LiveSignalCard({
   )
 }
 
+function HistoryStat({
+  label,
+  value,
+}: {
+  label: string
+  value: number | string
+}) {
+  return (
+    <span className="rounded-xl border border-(--border) bg-(--surface) px-2.5 py-1.5 font-bold text-(--foreground-muted)">
+      {label}:{" "}
+      <span className="text-(--foreground-secondary)">
+        {value}
+      </span>
+    </span>
+  )
+}
+
 function DetailBox({
   label,
   value,
@@ -2537,6 +2730,7 @@ function DetailBox({
 }) {
   return (
     <div className="rounded-2xl border border-(--border) bg-(--background-soft) p-4 transition hover:border-(--border-strong)">
+
       <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
         {label}
       </p>

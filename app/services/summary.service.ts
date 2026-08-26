@@ -6,8 +6,8 @@ export type SignalCounts =
   Record<SignalType, number>
 
 export type Snapshot = {
-  round?: number
-  topic?: string
+  round: number
+  topic: string
   got_it: number
   slightly_lost: number
   confused: number

@@ -23,8 +23,13 @@ export type SendSignalData = {
   studentId: string
   signal: SignalType
 
-  /*
-   * The teaching pulse that this response belongs to.
+  /**
+   * The topic number this response belongs to.
+   *
+   * Example:
+   * Topic 1
+   * Topic 2
+   * Topic 3
    */
   round: number
 }
@@ -43,11 +48,42 @@ export const EMPTY_SIGNAL_COUNTS: SignalCounts = {
   interesting: 0,
 }
 
-/*
- * =========================================================
- * SEND SIGNAL
- * =========================================================
- */
+function isValidSignalType(
+  signal: unknown
+): signal is SignalType {
+  return (
+    typeof signal === "string" &&
+    Object.prototype.hasOwnProperty.call(
+      EMPTY_SIGNAL_COUNTS,
+      signal
+    )
+  )
+}
+
+function normalizeRound(
+  value: unknown
+): number {
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0
+  ) {
+    return value
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value)
+
+    if (
+      Number.isInteger(parsed) &&
+      parsed > 0
+    ) {
+      return parsed
+    }
+  }
+
+  return 0
+}
 
 export async function sendSignal(
   data: SendSignalData
@@ -71,9 +107,7 @@ export async function sendSignal(
   }
 
   if (
-    !data.signal ||
-    !Object.prototype.hasOwnProperty.call(
-      EMPTY_SIGNAL_COUNTS,
+    !isValidSignalType(
       data.signal
     )
   ) {
@@ -87,7 +121,7 @@ export async function sendSignal(
     data.round <= 0
   ) {
     throw new Error(
-      "A valid teaching round is required."
+      "A valid topic number is required."
     )
   }
 
@@ -99,9 +133,9 @@ export async function sendSignal(
         studentId,
         signal: data.signal,
 
-        /*
-         * Every response belongs to
-         * one exact teaching pulse.
+        /**
+         * Stores which teaching topic
+         * the student responded to.
          */
         round: data.round,
 
@@ -112,12 +146,6 @@ export async function sendSignal(
 
   return signalRef.id
 }
-
-/*
- * =========================================================
- * SUBSCRIBE TO SESSION SIGNALS
- * =========================================================
- */
 
 export function subscribeToSessionSignals(
   sessionId: string,
@@ -132,12 +160,11 @@ export function subscribeToSessionSignals(
     sessionId.trim()
 
   if (!cleanSessionId) {
-    const error =
+    onError?.(
       new Error(
         "Session ID is required."
       )
-
-    onError?.(error)
+    )
 
     return () => {}
   }
@@ -160,6 +187,7 @@ export function subscribeToSessionSignals(
 
   return onSnapshot(
     signalsQuery,
+
     (snapshot) => {
       const signals: Signal[] =
         snapshot.docs.map(
@@ -186,17 +214,20 @@ export function subscribeToSessionSignals(
                   : "",
 
               signal:
-                data.signal as SignalType,
+                isValidSignalType(
+                  data.signal
+                )
+                  ? data.signal
+                  : "got_it",
 
-              /*
-               * Backward compatibility:
-               * old signals may not have round.
+              /**
+               * Old signals may not have
+               * a topic number.
                */
               round:
-                typeof data.round ===
-                "number"
-                  ? data.round
-                  : 0,
+                normalizeRound(
+                  data.round
+                ),
 
               timestamp:
                 data.timestamp,
@@ -208,6 +239,7 @@ export function subscribeToSessionSignals(
         signals
       )
     },
+
     (snapshotError) => {
       console.error(
         "Failed to subscribe to session signals:",
@@ -221,12 +253,6 @@ export function subscribeToSessionSignals(
   )
 }
 
-/*
- * =========================================================
- * SUBSCRIBE TO SIGNAL COUNTS
- * =========================================================
- */
-
 export function subscribeToSignalCounts(
   sessionId: string,
   callback: (
@@ -238,15 +264,14 @@ export function subscribeToSignalCounts(
 ) {
   return subscribeToSessionSignals(
     sessionId,
+
     (signals) => {
       const counts: SignalCounts = {
         ...EMPTY_SIGNAL_COUNTS,
       }
 
       signals.forEach(
-        (
-          signal
-        ) => {
+        (signal) => {
           if (
             Object.prototype.hasOwnProperty.call(
               counts,
@@ -264,15 +289,10 @@ export function subscribeToSignalCounts(
         counts
       )
     },
+
     onError
   )
 }
-
-/*
- * =========================================================
- * TOTAL SIGNAL COUNT
- * =========================================================
- */
 
 export function getTotalSignalCount(
   counts: SignalCounts
@@ -285,12 +305,6 @@ export function getTotalSignalCount(
   )
 }
 
-/*
- * =========================================================
- * UNIQUE STUDENT COUNT
- * =========================================================
- */
-
 export function getUniqueStudentCount(
   signals: Signal[]
 ): number {
@@ -300,65 +314,55 @@ export function getUniqueStudentCount(
         (
           signal
         ) =>
-          signal.studentId.trim()
+          signal.studentId
       )
       .filter(Boolean)
   ).size
 }
 
-/*
- * =========================================================
- * FILTER SIGNALS BY ROUND
- * =========================================================
- *
- * Small reusable helper for pages/services that
- * need only one teaching pulse.
+/**
+ * Get all signals belonging to
+ * one specific teaching topic.
  */
-
-export function getSignalsForRound(
+export function getSignalsForTopic(
   signals: Signal[],
-  round: number
+  topicNumber: number
 ): Signal[] {
   if (
-    !Number.isInteger(round) ||
-    round <= 0
+    !Number.isInteger(
+      topicNumber
+    ) ||
+    topicNumber <= 0
   ) {
     return []
   }
 
   return signals.filter(
-    (
-      signal
-    ) =>
+    (signal) =>
       signal.round ===
-      round
+      topicNumber
   )
 }
 
-/*
- * =========================================================
- * GET ROUND COUNTS
- * =========================================================
+/**
+ * Get signal counts for one topic.
  */
-
-export function getSignalCountsForRound(
+export function getSignalCountsForTopic(
   signals: Signal[],
-  round: number
+  topicNumber: number
 ): SignalCounts {
   const counts: SignalCounts = {
     ...EMPTY_SIGNAL_COUNTS,
   }
 
-  const roundSignals =
-    getSignalsForRound(
+  const topicSignals =
+    getSignalsForTopic(
       signals,
-      round
+      topicNumber
     )
 
-  roundSignals.forEach(
-    (
-      signal
-    ) => {
+  topicSignals.forEach(
+    (signal) => {
       if (
         Object.prototype.hasOwnProperty.call(
           counts,
@@ -375,23 +379,18 @@ export function getSignalCountsForRound(
   return counts
 }
 
-/*
- * =========================================================
- * GET UNIQUE STUDENTS FOR ROUND
- * =========================================================
+/**
+ * Get unique students who responded
+ * to one specific topic.
  */
-
-export function getUniqueStudentCountForRound(
+export function getUniqueStudentCountForTopic(
   signals: Signal[],
-  round: number
+  topicNumber: number
 ): number {
-  const roundSignals =
-    getSignalsForRound(
-      signals,
-      round
-    )
-
   return getUniqueStudentCount(
-    roundSignals
+    getSignalsForTopic(
+      signals,
+      topicNumber
+    )
   )
 }
