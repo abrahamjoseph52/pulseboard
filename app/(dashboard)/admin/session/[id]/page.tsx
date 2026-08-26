@@ -121,9 +121,7 @@ const SIGNAL_META: Record<
 > = {
   got_it: {
     label: "Got it",
-    icon: (
-      <Check className="h-5 w-5" />
-    ),
+    icon: <Check className="h-5 w-5" />,
     tone:
       "border-emerald-400/15 bg-emerald-500/[0.055]",
     iconTone:
@@ -394,10 +392,11 @@ export default function AdminSessionPage() {
     useRef(false)
 
   /*
-   * Keep current session available to
-   * Firestore listeners without causing
-   * subscription recreation.
+   * =========================================================
+   * KEEP CURRENT SESSION IN REF
+   * =========================================================
    */
+
   useEffect(() => {
     sessionRef.current =
       session
@@ -531,7 +530,7 @@ export default function AdminSessionPage() {
 
   /*
    * =========================================================
-   * LOAD SAVED SNAPSHOTS
+   * LOAD SAVED ROUND SNAPSHOTS
    * =========================================================
    */
 
@@ -571,11 +570,21 @@ export default function AdminSessionPage() {
                   const data =
                     snapshotDoc.data()
 
+                  /*
+                   * IMPORTANT:
+                   *
+                   * Convert round with toNumber()
+                   * so Snapshot receives a guaranteed
+                   * number instead of undefined.
+                   */
+
+                  const round =
+                    toNumber(
+                      data.round
+                    )
+
                   return {
-                    round:
-                      toNumber(
-                        data.round
-                      ),
+                    round,
 
                     topic:
                       typeof data.topic ===
@@ -610,19 +619,25 @@ export default function AdminSessionPage() {
                   } satisfies Snapshot
                 }
               )
+
+              /*
+               * Ignore invalid / legacy snapshots
+               * without a valid teaching round.
+               */
+
               .filter(
-                (
-                  item
-                ) =>
-                  item.round > 0
+                (item) =>
+                  (item.round ?? 0) > 0
               )
+
+              /*
+               * TypeScript-safe sorting.
+               */
+
               .sort(
-                (
-                  a,
-                  b
-                ) =>
-                  a.round -
-                  b.round
+                (a, b) =>
+                  (a.round ?? 0) -
+                  (b.round ?? 0)
               )
 
           roundSnapshotsRef.current =
@@ -648,13 +663,6 @@ export default function AdminSessionPage() {
    * =========================================================
    * LIVE FIRESTORE SIGNALS
    * =========================================================
-   *
-   * Every Firestore update recalculates:
-   *
-   * 1. all-session totals
-   * 2. current-round totals
-   *
-   * No "new signal ID" tracking.
    */
 
   useEffect(() => {
@@ -709,13 +717,12 @@ export default function AdminSessionPage() {
 
           /*
            * -----------------------------------------
-           * CURRENT ROUND SIGNALS
+           * CURRENT ROUND
            * -----------------------------------------
            */
 
           const currentRound =
-            currentSession
-              ?.currentRound ??
+            currentSession?.currentRound ??
             0
 
           const currentRoundSignals =
@@ -726,7 +733,7 @@ export default function AdminSessionPage() {
                   (
                     signal
                   ) =>
-                    signal.round ===
+                    (signal.round ?? 0) ===
                     currentRound
                 )
               : []
@@ -751,6 +758,12 @@ export default function AdminSessionPage() {
             }
           )
 
+          /*
+           * -----------------------------------------
+           * CURRENT ROUND STUDENTS
+           * -----------------------------------------
+           */
+
           const currentRoundStudents =
             getUniqueStudentCount(
               currentRoundSignals
@@ -758,7 +771,7 @@ export default function AdminSessionPage() {
 
           /*
            * -----------------------------------------
-           * UPDATE UI STATE
+           * UPDATE LIVE UI
            * -----------------------------------------
            */
 
@@ -806,11 +819,8 @@ export default function AdminSessionPage() {
 
           /*
            * -----------------------------------------
-           * KEEP SESSION AGGREGATES IN FIRESTORE
+           * KEEP SESSION AGGREGATES UPDATED
            * -----------------------------------------
-           *
-           * participantCount = unique students
-           * across entire session.
            */
 
           if (
@@ -841,10 +851,6 @@ export default function AdminSessionPage() {
             )
           }
 
-          /*
-           * Logging during development.
-           * Useful for confirming live data.
-           */
           console.debug(
             "PulseBoard live signals:",
             {
@@ -903,9 +909,11 @@ export default function AdminSessionPage() {
           return null
         }
 
+        const currentRound =
+          currentSession.currentRound
+
         if (
-          currentSession.currentRound <=
-          0
+          currentRound <= 0
         ) {
           return null
         }
@@ -920,63 +928,59 @@ export default function AdminSessionPage() {
         const counts =
           roundCountsRef.current
 
-        const total =
+        const totalSignals =
           getTotalSignalCount(
             counts
           )
 
         if (
           !force &&
-          total === 0
+          totalSignals === 0
         ) {
           return null
         }
 
-        const alreadySaved =
-          roundSnapshotsRef.current.some(
+        /*
+         * Prevent duplicate snapshots.
+         */
+
+        const existingSnapshot =
+          roundSnapshotsRef.current.find(
             (
               snapshot
             ) =>
-              snapshot.round ===
-              currentSession.currentRound
+              (snapshot.round ?? 0) ===
+              currentRound
           )
 
         if (
-          alreadySaved
+          existingSnapshot
         ) {
-          return (
-            roundSnapshotsRef.current.find(
-              (
-                snapshot
-              ) =>
-                snapshot.round ===
-                currentSession.currentRound
-            ) ?? null
-          )
+          return existingSnapshot
         }
 
         /*
-         * Use current-round students first.
-         * Fall back to session-level students.
+         * Prefer current-round students.
+         *
+         * If there are no current-round
+         * students, fall back to session total.
          */
+
         const currentRoundStudents =
-          getUniqueStudentCountFromRound(
-            currentSession.currentRound,
-            currentSession
-          )
+          liveStatsRef.current
+            .uniqueStudents
 
         const totalStudents =
-          currentRoundStudents ??
-          Math.max(
-            liveStatsRef.current
-              .uniqueStudents,
-            currentSession
-              .participantCount
-          )
+          currentRoundStudents > 0
+            ? currentRoundStudents
+            : Math.max(
+                currentSession.participantCount,
+                0
+              )
 
         const snapshot =
           createSnapshot(
-            currentSession.currentRound,
+            currentRound,
             currentTopic,
             counts,
             totalStudents
@@ -991,6 +995,7 @@ export default function AdminSessionPage() {
           ),
           {
             ...snapshot,
+
             createdAt:
               serverTimestamp(),
           }
@@ -1000,7 +1005,11 @@ export default function AdminSessionPage() {
           [
             ...roundSnapshotsRef.current,
             snapshot,
-          ]
+          ].sort(
+            (a, b) =>
+              (a.round ?? 0) -
+              (b.round ?? 0)
+          )
 
         roundSnapshotsRef.current =
           nextSnapshots
@@ -1066,7 +1075,7 @@ export default function AdminSessionPage() {
           setError(null)
 
           /*
-           * Fresh counter for the next round.
+           * Reset current-round counters.
            */
 
           const emptyCounts =
@@ -1107,11 +1116,6 @@ export default function AdminSessionPage() {
             }
           )
 
-          /*
-           * Topic is now stored in Firestore,
-           * so it remains visible after refresh.
-           */
-
           setTopic("")
         } catch (
           startError
@@ -1140,8 +1144,6 @@ export default function AdminSessionPage() {
    * =========================================================
    * FINISH PULSE
    * =========================================================
-   *
-   * Manual only.
    */
 
   const handleFinishPulse =
@@ -1190,11 +1192,6 @@ export default function AdminSessionPage() {
                 serverTimestamp(),
             }
           )
-
-          /*
-           * Clear current-round UI only.
-           * Topic stays in Firestore/history.
-           */
 
           const emptyCounts =
             createEmptyCounts()
@@ -1263,6 +1260,10 @@ export default function AdminSessionPage() {
           setEnding(true)
           setError(null)
 
+          /*
+           * Save current pulse first.
+           */
+
           if (
             currentSession.roundStatus ===
             "active"
@@ -1287,10 +1288,18 @@ export default function AdminSessionPage() {
             )
           }
 
+          /*
+           * Use latest snapshot list.
+           */
+
           const snapshots =
             [
               ...roundSnapshotsRef.current,
-            ]
+            ].sort(
+              (a, b) =>
+                (a.round ?? 0) -
+                (b.round ?? 0)
+            )
 
           let aiSummary = ""
 
@@ -1487,6 +1496,7 @@ export default function AdminSessionPage() {
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
 
         {/* TOP BAR */}
+
         <header className="flex items-center justify-between gap-3">
           <button
             type="button"
@@ -1515,6 +1525,7 @@ export default function AdminSessionPage() {
         </header>
 
         {/* HERO */}
+
         <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-violet-400/10 bg-linear-to-br from-violet-600/[0.14] via-(--surface) to-indigo-600/[0.10] p-6 shadow-(--shadow-lg) sm:p-8 lg:p-10">
           <div
             aria-hidden="true"
@@ -1629,6 +1640,7 @@ export default function AdminSessionPage() {
         </section>
 
         {/* ERROR */}
+
         {error && (
           <div className="mt-5 flex items-start gap-3 rounded-2xl border border-rose-500/15 bg-rose-500/[0.06] px-4 py-3">
             <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
@@ -1639,9 +1651,7 @@ export default function AdminSessionPage() {
           </div>
         )}
 
-        {/* =====================================================
-            CONTROL CENTER
-        ===================================================== */}
+        {/* CONTROL CENTER */}
 
         {isActive && (
           <section className="mt-6 grid gap-6 xl:grid-cols-[500px_minmax(0,1fr)]">
@@ -1688,9 +1698,7 @@ export default function AdminSessionPage() {
               />
 
               <div className="relative z-10">
-
                 <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-
                   <div className="min-w-0">
                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
                       Teaching pulse
@@ -1714,7 +1722,6 @@ export default function AdminSessionPage() {
 
                   {isPulseActive ? (
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
-
                       <div className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 px-4 py-2.5">
                         <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
 
@@ -1786,9 +1793,7 @@ export default function AdminSessionPage() {
                     <div className="relative">
                       <input
                         id="pulse-topic"
-                        value={
-                          topic
-                        }
+                        value={topic}
                         onChange={(
                           event
                         ) => {
@@ -1913,9 +1918,7 @@ export default function AdminSessionPage() {
           </section>
         )}
 
-        {/* =====================================================
-            METRICS
-        ===================================================== */}
+        {/* METRICS */}
 
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
@@ -1977,13 +1980,12 @@ export default function AdminSessionPage() {
           />
         </section>
 
-        {/* =====================================================
-            LIVE PULSE + AI
-        ===================================================== */}
+        {/* LIVE PULSE + AI */}
 
         <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_370px]">
 
           {/* LIVE */}
+
           <div className="surface overflow-hidden rounded-[2rem] p-6 sm:p-7">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -2146,6 +2148,7 @@ export default function AdminSessionPage() {
           </div>
 
           {/* AI */}
+
           <aside className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6">
             <div
               aria-hidden="true"
@@ -2216,6 +2219,7 @@ export default function AdminSessionPage() {
         </section>
 
         {/* SESSION DETAILS */}
+
         <section className="surface mt-6 overflow-hidden rounded-[2rem] p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
@@ -2271,20 +2275,9 @@ export default function AdminSessionPage() {
 
 /*
  * =========================================================
- * HELPERS
+ * UI HELPERS
  * =========================================================
- *
- * We intentionally return null here until we wire a dedicated
- * round query helper. persistRoundSnapshot already has the
- * correct fallback to session-level students.
  */
-
-function getUniqueStudentCountFromRound(
-  _round: number,
-  _session: SessionView
-): number | null {
-  return null
-}
 
 function InfoChip({
   icon,
