@@ -46,6 +46,7 @@ import {
 } from "@/lib/firebase"
 
 import ThemeToggle from "@/app/components/ThemeToggle"
+import LiveDateTime from "@/app/components/LiveDateTime"
 
 type StudentProfile = {
   name: string
@@ -445,6 +446,8 @@ export default function StudentDashboardPage() {
           </div>
 
           <div className="flex items-center gap-2">
+
+            <LiveDateTime />
 
             <ThemeToggle />
 

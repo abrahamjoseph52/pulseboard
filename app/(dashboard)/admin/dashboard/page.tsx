@@ -53,7 +53,7 @@ import CreateSessionModal, {
 } from "@/app/components/admin/CreateSessionModal"
 
 import ThemeToggle from "@/app/components/ThemeToggle"
-
+import LiveDateTime from "@/app/components/LiveDateTime"
 type FacultyProfile = {
   name: string
   email: string
@@ -533,6 +533,8 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="flex items-center gap-2">
+
+            <LiveDateTime />
 
             <ThemeToggle />
 
