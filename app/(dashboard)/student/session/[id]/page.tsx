@@ -1,3 +1,4 @@
+
 "use client"
 
 import {
@@ -65,13 +66,39 @@ export default function StudentSessionPage() {
       : undefined
   )
 
+  /*
+   * Read the current round directly from Firestore-backed session state.
+   */
+  const currentRound =
+    session?.currentRound ?? 0
+
+  /*
+   * Store the selected signal together with
+   * the round in which it was selected.
+   *
+   * This avoids using useEffect just to reset state.
+   */
   const [
-    selectedSignal,
-    setSelectedSignal,
+    selectedSignalState,
+    setSelectedSignalState,
   ] =
-    useState<SignalType | null>(
-      null
-    )
+    useState<{
+      round: number
+      signal: SignalType
+    } | null>(null)
+
+  /*
+   * Only expose the selected signal if it belongs
+   * to the current teaching round.
+   *
+   * When the lecturer starts Round 2, a Round 1
+   * selection automatically becomes null.
+   */
+  const selectedSignal =
+    selectedSignalState?.round ===
+    currentRound
+      ? selectedSignalState.signal
+      : null
 
   const [
     sending,
@@ -84,8 +111,8 @@ export default function StudentSessionPage() {
   ] = useState("")
 
   /*
-   * The session is considered active directly from Firestore.
-   * There is no client-side countdown/timer anymore.
+   * The session is controlled by Firestore.
+   * There is no client-side timer.
    */
   const effectiveSessionActive =
     Boolean(
@@ -94,13 +121,38 @@ export default function StudentSessionPage() {
           "active"
     )
 
+  /*
+   * Current teaching topic.
+   */
+  const roundTopic =
+    session?.roundTopic ||
+    ""
+
+  /*
+   * =========================================================
+   * SEND SIGNAL
+   * =========================================================
+   */
+
   const handleSendSignal =
     async (
       signal: SignalType
     ) => {
       if (
         !effectiveSessionActive ||
+        session?.roundStatus !==
+          "active" ||
         sending
+      ) {
+        return
+      }
+
+      /*
+       * Prevent multiple selections
+       * within the same teaching round.
+       */
+      if (
+        selectedSignal
       ) {
         return
       }
@@ -125,12 +177,8 @@ export default function StudentSessionPage() {
       }
 
       /*
-       * IMPORTANT:
-       * useSession can return null, so use optional chaining.
+       * A valid teaching pulse must exist.
        */
-      const currentRound =
-        session?.currentRound ?? 0
-
       if (
         currentRound <= 0
       ) {
@@ -154,13 +202,24 @@ export default function StudentSessionPage() {
 
           signal,
 
+          /*
+           * This connects the response
+           * to the exact teaching round.
+           */
           round:
             currentRound,
         })
 
-        setSelectedSignal(
-          signal
-        )
+        /*
+         * Lock this student's response
+         * to the current round.
+         */
+        setSelectedSignalState({
+          round:
+            currentRound,
+
+          signal,
+        })
       } catch (
         error
       ) {
@@ -179,12 +238,24 @@ export default function StudentSessionPage() {
       }
     }
 
+  /*
+   * =========================================================
+   * NAVIGATION
+   * =========================================================
+   */
+
   const handleLeaveSession =
     () => {
       router.push(
         "/student"
       )
     }
+
+  /*
+   * =========================================================
+   * DISPLAY VALUES
+   * =========================================================
+   */
 
   const participantCount =
     session?.participantCount ??
@@ -201,13 +272,6 @@ export default function StudentSessionPage() {
   const joinCode =
     session?.joinCode ||
     "------"
-
-  const currentRound =
-    session?.currentRound ?? 0
-
-  const roundTopic =
-    session?.roundTopic ||
-    ""
 
   const statusText =
     effectiveSessionActive
@@ -245,7 +309,9 @@ export default function StudentSessionPage() {
         return "Your classroom is ready. Wait for your lecturer to start the next teaching pulse."
       }
 
-      if (roundTopic) {
+      if (
+        roundTopic
+      ) {
         return `Your lecturer is currently teaching “${roundTopic}”. Share how you are following the lesson.`
       }
 
@@ -392,6 +458,7 @@ export default function StudentSessionPage() {
 
           <div className="relative flex flex-col gap-7 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0 flex-1">
+
               <div className="flex flex-wrap items-center gap-2">
                 <span
                   className={[
@@ -419,13 +486,9 @@ export default function StudentSessionPage() {
                   {courseCode}
                 </span>
 
-                {currentRound >
-                  0 && (
+                {currentRound > 0 && (
                   <span className="rounded-full border border-indigo-400/10 bg-indigo-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-indigo-300">
-                    Round{" "}
-                    {
-                      currentRound
-                    }
+                    Round {currentRound}
                   </span>
                 )}
               </div>
@@ -468,6 +531,7 @@ export default function StudentSessionPage() {
 
             <div className="hidden lg:flex">
               <div className="relative flex h-48 w-48 items-center justify-center">
+
                 <div className="absolute inset-0 rounded-full border border-violet-400/10 bg-violet-500/5" />
 
                 <div className="absolute inset-6 rounded-full border border-violet-400/10" />
@@ -584,9 +648,11 @@ export default function StudentSessionPage() {
 
           {/* Feedback */}
           <section className="surface overflow-hidden rounded-[2rem]">
+
             <div className="border-b border-(--border) bg-linear-to-r from-violet-500/[0.04] to-transparent p-5 sm:p-7">
               <div className="flex items-start justify-between gap-4">
                 <div>
+
                   <div className="flex items-center gap-2">
                     <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
                       <Sparkles className="h-4 w-4" />
@@ -602,9 +668,10 @@ export default function StudentSessionPage() {
                   </h2>
 
                   <p className="mt-2 max-w-xl text-sm leading-6 text-(--foreground-muted)">
-                    Choose the response that best represents your
+                    Choose one response that best represents your
                     understanding right now.
                   </p>
+
                 </div>
 
                 <div className="hidden h-11 w-11 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300 sm:flex">
@@ -614,11 +681,13 @@ export default function StudentSessionPage() {
             </div>
 
             <div className="p-5 sm:p-7">
+
               {effectiveSessionActive &&
               session.roundStatus ===
                 "active" ? (
                 <>
                   <FeedbackForm
+                    key={currentRound}
                     onSend={
                       handleSendSignal
                     }
@@ -637,6 +706,7 @@ export default function StudentSessionPage() {
 
                   {sendError && (
                     <div className="mt-5 flex items-start gap-3 rounded-2xl border border-rose-500/15 bg-rose-500/[0.06] px-4 py-3">
+
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-500/10 text-rose-300">
                         <Radio className="h-4 w-4" />
                       </div>
@@ -656,12 +726,14 @@ export default function StudentSessionPage() {
                   {selectedSignal &&
                     !sending && (
                       <div className="relative mt-5 overflow-hidden rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.045] p-4">
+
                         <div
                           aria-hidden="true"
                           className="pointer-events-none absolute -right-8 -top-8 h-20 w-20 rounded-full bg-emerald-400/10 blur-2xl"
                         />
 
                         <div className="relative z-10 flex items-start gap-3">
+
                           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
                             <CheckCircle2 className="h-5 w-5" />
                           </div>
@@ -676,6 +748,7 @@ export default function StudentSessionPage() {
                               faculty in the live classroom dashboard.
                             </p>
                           </div>
+
                         </div>
                       </div>
                     )}
@@ -696,6 +769,7 @@ export default function StudentSessionPage() {
                   }
                 />
               )}
+
             </div>
           </section>
 
@@ -710,8 +784,11 @@ export default function StudentSessionPage() {
               }
             >
               <div className="p-5">
+
                 <div className="flex items-center justify-between gap-3">
+
                   <div className="flex items-center gap-3">
+
                     <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
                       <Radio className="h-5 w-5" />
                     </div>
@@ -725,6 +802,7 @@ export default function StudentSessionPage() {
                         Live faculty control
                       </p>
                     </div>
+
                   </div>
 
                   <span
@@ -739,9 +817,11 @@ export default function StudentSessionPage() {
                       ? "Live"
                       : "Done"}
                   </span>
+
                 </div>
 
                 <div className="mt-5 rounded-2xl border border-(--border) bg-(--background-soft) p-4">
+
                   <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
                     Current topic
                   </p>
@@ -754,24 +834,24 @@ export default function StudentSessionPage() {
                   {currentRound >
                     0 && (
                     <p className="mt-1 text-[10px] text-(--foreground-muted)">
-                      Round{" "}
-                      {
-                        currentRound
-                      }
+                      Round {currentRound}
                     </p>
                   )}
+
                 </div>
 
                 <div className="mt-3 flex items-center gap-2 text-[10px] text-(--foreground-subtle)">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400" />
                   No countdown — your lecturer controls the pulse.
                 </div>
+
               </div>
             </Card>
 
             {/* How it works */}
             <Card>
               <div className="flex items-center gap-3">
+
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-300">
                   <Sparkles className="h-5 w-5" />
                 </div>
@@ -785,9 +865,11 @@ export default function StudentSessionPage() {
                     How it works
                   </h2>
                 </div>
+
               </div>
 
               <div className="mt-5 space-y-4">
+
                 <Step
                   number="01"
                   title="Choose"
@@ -805,17 +887,20 @@ export default function StudentSessionPage() {
                   title="Keep learning"
                   text="Stay focused and respond again when the next pulse begins."
                 />
+
               </div>
             </Card>
 
             {/* Trust card */}
             <div className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-violet-500/[0.04] to-indigo-500/5 p-5">
+
               <div
                 aria-hidden="true"
                 className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-violet-500/10 blur-3xl"
               />
 
               <div className="relative z-10">
+
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
                   <Users className="h-5 w-5" />
                 </div>
@@ -842,8 +927,10 @@ export default function StudentSessionPage() {
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
                   Live classroom response
                 </div>
+
               </div>
             </div>
+
           </aside>
         </div>
 
@@ -852,6 +939,7 @@ export default function StudentSessionPage() {
         ===================================================== */}
 
         <section className="mt-6 grid gap-4 sm:grid-cols-3">
+
           <MiniSessionCard
             icon={
               <Users className="h-5 w-5" />
@@ -889,6 +977,7 @@ export default function StudentSessionPage() {
             }
             tone="emerald"
           />
+
         </section>
       </div>
     </main>
@@ -930,12 +1019,14 @@ function PulseComplete({
 }) {
   return (
     <div className="relative flex min-h-[420px] flex-col items-center justify-center overflow-hidden px-4 py-8 text-center">
+
       <div
         aria-hidden="true"
         className="pointer-events-none absolute left-1/2 top-1/2 h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-400/5 blur-3xl"
       />
 
       <div className="relative flex h-20 w-20 items-center justify-center rounded-[2rem] bg-linear-to-br from-emerald-500/15 to-violet-500/10 text-emerald-300">
+
         <div
           aria-hidden="true"
           className="absolute inset-0 animate-pulse rounded-[2rem] bg-emerald-400/5"
@@ -988,6 +1079,7 @@ function Step({
 }) {
   return (
     <div className="flex gap-3">
+
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-[10px] font-black text-violet-300">
         {number}
       </span>
@@ -1001,6 +1093,7 @@ function Step({
           {text}
         </p>
       </div>
+
     </div>
   )
 }
@@ -1033,6 +1126,7 @@ function MiniSessionCard({
   return (
     <div className="surface surface-hover rounded-3xl p-5">
       <div className="flex items-center gap-3">
+
         <div
           className={[
             "flex h-10 w-10 items-center justify-center rounded-2xl",
@@ -1051,6 +1145,7 @@ function MiniSessionCard({
             {value}
           </p>
         </div>
+
       </div>
     </div>
   )

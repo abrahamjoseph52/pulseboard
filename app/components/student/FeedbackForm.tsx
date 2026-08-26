@@ -170,12 +170,31 @@ export default function FeedbackForm({
   disabled = false,
   selectedSignal = null,
 }: FeedbackFormProps) {
+  /*
+   * Once a signal has been successfully selected,
+   * the student is locked to that one response.
+   *
+   * This prevents:
+   *
+   * Got it -> Confused -> Interesting
+   *
+   * during the same teaching pulse.
+   */
+  const responseLocked =
+    Boolean(selectedSignal)
+
+  const isDisabled =
+    loading ||
+    disabled ||
+    responseLocked
+
   const handleSend = async (
     signal: SignalType
   ) => {
     if (
       loading ||
-      disabled
+      disabled ||
+      responseLocked
     ) {
       return
     }
@@ -183,20 +202,16 @@ export default function FeedbackForm({
     await onSend(signal)
   }
 
-  const isDisabled =
-    loading || disabled
-
   const selectedOption =
     signalOptions.find(
-      (
-        option
-      ) =>
+      (option) =>
         option.type ===
         selectedSignal
     )
 
   return (
     <div className="w-full">
+
       {/* =====================================================
           HEADER
       ===================================================== */}
@@ -215,8 +230,8 @@ export default function FeedbackForm({
         </h2>
 
         <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-(--foreground-muted)">
-          Your quick signal helps your faculty understand the
-          classroom without interrupting the lesson.
+          Choose the one response that best represents your
+          understanding right now.
         </p>
       </div>
 
@@ -224,14 +239,20 @@ export default function FeedbackForm({
           SIGNAL GRID
       ===================================================== */}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div
+        role="radiogroup"
+        aria-label="Choose your classroom feedback"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+      >
         {signalOptions.map(
-          (
-            option
-          ) => {
+          (option) => {
             const isSelected =
               selectedSignal ===
               option.type
+
+            const isOtherOption =
+              responseLocked &&
+              !isSelected
 
             return (
               <button
@@ -247,21 +268,52 @@ export default function FeedbackForm({
                     option.type
                   )
                 }
-                aria-pressed={
+                role="radio"
+                aria-checked={
                   isSelected
+                }
+                aria-label={
+                  `${option.label}. ${option.description}`
                 }
                 className={[
                   "group relative min-h-38 overflow-hidden rounded-3xl border p-5 text-left",
+
                   "bg-(--surface)",
+
                   "transition-all duration-250 ease-out",
+
                   "focus:outline-none",
-                  "focus-visible:ring-2 focus-visible:ring-violet-400/60",
-                  option.hoverClassName,
+                  "focus-visible:ring-2",
+                  "focus-visible:ring-violet-400/60",
+
+                  /*
+                   * Selected option.
+                   */
                   isSelected
                     ? option.selectedClassName
                     : "border-(--border) shadow-(--shadow-xs)",
+
+                  /*
+                   * Normal hover.
+                   */
+                  !isDisabled &&
+                  !responseLocked
+                    ? option.hoverClassName
+                    : "",
+
+                  /*
+                   * After one selection:
+                   * other choices are visually inactive.
+                   */
+                  isOtherOption
+                    ? "opacity-40 grayscale-[0.2]"
+                    : "",
+
+                  /*
+                   * Disabled / selected state.
+                   */
                   isDisabled
-                    ? "cursor-not-allowed opacity-50"
+                    ? "cursor-not-allowed"
                     : [
                         "cursor-pointer",
                         "hover:-translate-y-1",
@@ -275,10 +327,14 @@ export default function FeedbackForm({
                   aria-hidden="true"
                   className={[
                     "pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full blur-3xl",
+
                     option.iconGlowClassName,
+
                     isSelected
                       ? "opacity-100"
-                      : "opacity-0 transition-opacity duration-300 group-hover:opacity-60",
+                      : !responseLocked
+                        ? "opacity-0 transition-opacity duration-300 group-hover:opacity-60"
+                        : "opacity-0",
                   ].join(" ")}
                 />
 
@@ -287,9 +343,12 @@ export default function FeedbackForm({
                   aria-hidden="true"
                   className={[
                     "pointer-events-none absolute inset-0",
+
                     "bg-linear-to-br from-white/[0.025] via-transparent to-transparent",
-                    "opacity-0 transition-opacity duration-300",
-                    "group-hover:opacity-100",
+
+                    !responseLocked
+                      ? "opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+                      : "opacity-0",
                   ].join(" ")}
                 />
 
@@ -298,22 +357,33 @@ export default function FeedbackForm({
                   <span
                     className={[
                       "flex h-12 w-12 items-center justify-center rounded-2xl",
+
                       "transition-transform duration-250",
+
                       option.iconClassName,
-                      isDisabled
-                        ? ""
-                        : "group-hover:scale-110 group-hover:-rotate-2",
+
+                      !isDisabled &&
+                      !responseLocked
+                        ? "group-hover:scale-110 group-hover:-rotate-2"
+                        : "",
                     ].join(" ")}
                   >
                     {option.icon}
                   </span>
 
                   {isSelected ? (
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-(--foreground) text-(--background) shadow-lg">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-400/20">
                       <Check className="h-4 w-4" />
                     </span>
                   ) : (
-                    <span className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle) opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                    <span
+                      className={[
+                        "text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)",
+                        !responseLocked
+                          ? "opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                          : "opacity-0",
+                      ].join(" ")}
+                    >
                       Tap
                     </span>
                   )}
@@ -323,16 +393,22 @@ export default function FeedbackForm({
                 <div className="relative z-10 mt-5">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-black text-(--foreground)">
-                      {option.label}
+                      {
+                        option.label
+                      }
                     </p>
 
                     <span className="rounded-full bg-(--background-soft) px-2 py-0.5 text-[9px] font-bold text-(--foreground-subtle)">
-                      {option.shortLabel}
+                      {
+                        option.shortLabel
+                      }
                     </span>
                   </div>
 
                   <p className="mt-2 text-xs leading-5 text-(--foreground-muted)">
-                    {option.description}
+                    {
+                      option.description
+                    }
                   </p>
                 </div>
 
@@ -344,9 +420,12 @@ export default function FeedbackForm({
                     "bg-linear-to-r",
                     option.accentClassName,
                     "transition-opacity duration-200",
+
                     isSelected
                       ? "opacity-100"
-                      : "opacity-0 group-hover:opacity-60",
+                      : !responseLocked
+                        ? "opacity-0 group-hover:opacity-60"
+                        : "opacity-0",
                   ].join(" ")}
                 />
 
@@ -400,12 +479,29 @@ export default function FeedbackForm({
                 <p className="mt-0.5 text-[11px] leading-5 text-(--foreground-muted)">
                   You selected{" "}
                   <span className="font-bold text-(--foreground-secondary)">
-                    {selectedOption.label}
+                    {
+                      selectedOption.label
+                    }
                   </span>
                   . Your faculty can now see the classroom pulse.
                 </p>
               </div>
             </div>
+          </div>
+        )}
+
+      {/* =====================================================
+          LOCKED STATE
+      ===================================================== */}
+
+      {responseLocked &&
+        !loading && (
+          <div className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-(--border) bg-(--background-soft) px-4 py-2.5 text-center">
+            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+
+            <p className="text-[10px] font-bold text-(--foreground-muted)">
+              One response recorded for this pulse.
+            </p>
           </div>
         )}
 
@@ -421,8 +517,8 @@ export default function FeedbackForm({
             </p>
 
             <p className="mt-1 text-[11px] text-(--foreground-subtle)">
-              Your next pulse will become available when the faculty starts
-              another teaching segment.
+              Your next pulse will become available when the
+              faculty starts another teaching segment.
             </p>
           </div>
         )}
