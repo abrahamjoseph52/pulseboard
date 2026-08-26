@@ -2,19 +2,21 @@
 
 import {
   ArrowLeft,
+  ArrowRight,
   Check,
-  Copy,
+  CheckCircle2,
+  HelpCircle,
+  Lightbulb,
   Radio,
   Sparkles,
-  StopCircle,
-  TrendingUp,
   Users,
-  Wifi,
+  XCircle,
+  Zap,
 } from "lucide-react"
 
 import {
+  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -29,565 +31,304 @@ import {
   addDoc,
   collection,
   doc,
+  getDocs,
   onSnapshot,
-  query,
   serverTimestamp,
-  Timestamp,
   updateDoc,
-  where,
 } from "firebase/firestore"
 
-import {
-  onAuthStateChanged,
-} from "firebase/auth"
-
-import {
-  auth,
-  db,
-} from "@/lib/firebase"
-
-import {
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts"
+import { db } from "@/lib/firebase"
 
 import type {
+  Session,
+  Signal,
   SignalType,
 } from "@/lib/types"
 
-/* =========================================================
-   TYPES
-========================================================= */
+import {
+  EMPTY_SIGNAL_COUNTS,
+  getTotalSignalCount,
+  getUniqueStudentCount,
+  subscribeToSessionSignals,
+  type SignalCounts,
+} from "@/app/services/feedback.service"
 
-type SignalCounts = {
-  got_it: number
-  slightly_lost: number
-  confused: number
-  interesting: number
-}
+import {
+  generateSummary,
+  type Snapshot,
+} from "@/app/services/summary.service"
 
-type Session = {
-  id: string
-  adminId?: string
-  title?: string
-  courseCode?: string
-  joinCode?: string
-  status?: "active" | "ended"
-  createdAt?: Timestamp | null
-  startedAt?: Timestamp | null
-  endedAt?: Timestamp | null
-  aiSummary?: string | null
-  participantCount?: number
-  currentRound?: number
-  roundStatus?: "waiting" | "active" | "ended"
-  roundTopic?: string
-}
+import Button from "@/app/components/ui/Button"
+import Loading from "@/app/components/ui/Loading"
+import ThemeToggle from "@/app/components/ThemeToggle"
+import SessionQRCode from "@/app/components/admin/SessionQRCode"
 
-type SignalDoc = {
-  studentId: string
-  signal: SignalType
-  round: number
-  timestamp?: Timestamp | null
-}
-
-type RoundSnapshot = {
-  round: number
-  got_it: number
-  slightly_lost: number
-  confused: number
-  interesting: number
-  total: number
-  confusion: number
-}
-
-type RoomState =
+type RoundStatus =
   | "waiting"
-  | "green"
-  | "yellow"
-  | "red"
+  | "active"
+  | "completed"
 
-/* =========================================================
-   CONSTANTS
-========================================================= */
+type FirestoreSessionData =
+  Omit<Session, "id"> & {
+    totalSignals?: unknown
+    aiSummary?: unknown
 
-const EMPTY_COUNTS: SignalCounts = {
-  got_it: 0,
-  slightly_lost: 0,
-  confused: 0,
-  interesting: 0,
+    roundStatus?: unknown
+    currentRound?: unknown
+    roundTopic?: unknown
+    roundStartedAt?: unknown
+    roundEndedAt?: unknown
+  }
+
+type SessionView = {
+  id: string
+  title: string
+  courseCode: string
+  joinCode: string
+  status: Session["status"]
+
+  participantCount: number
+  totalSignals: number
+
+  aiSummary: unknown
+
+  roundStatus: RoundStatus
+  currentRound: number
+  roundTopic: string
+
+  roundStartedAt: unknown
+  roundEndedAt: unknown
+
+  raw: FirestoreSessionData
 }
 
-const SIGNAL_CONFIG: Record<
+type LiveSignalStats = {
+  counts: SignalCounts
+  total: number
+  uniqueStudents: number
+}
+
+const SIGNAL_META: Record<
   SignalType,
   {
     label: string
-    description: string
-    color: string
-    bg: string
+    icon: ReactNode
+    tone: string
+    iconTone: string
+    bar: string
+    glow: string
   }
 > = {
   got_it: {
     label: "Got it",
-    description: "Students are following clearly",
-    color: "#22c55e",
-    bg: "bg-emerald-500/10",
+    icon: (
+      <Check className="h-5 w-5" />
+    ),
+    tone:
+      "border-emerald-400/15 bg-emerald-500/[0.055]",
+    iconTone:
+      "bg-emerald-500/10 text-emerald-300",
+    bar:
+      "from-emerald-400 to-teal-400",
+    glow:
+      "bg-emerald-400/10",
   },
 
   slightly_lost: {
     label: "Slightly lost",
-    description: "Some students need clarification",
-    color: "#f59e0b",
-    bg: "bg-amber-500/10",
+    icon: (
+      <Lightbulb className="h-5 w-5" />
+    ),
+    tone:
+      "border-amber-400/15 bg-amber-500/[0.055]",
+    iconTone:
+      "bg-amber-500/10 text-amber-300",
+    bar:
+      "from-amber-400 to-orange-400",
+    glow:
+      "bg-amber-400/10",
   },
 
   confused: {
     label: "Confused",
-    description: "Students need more explanation",
-    color: "#ef4444",
-    bg: "bg-rose-500/10",
+    icon: (
+      <HelpCircle className="h-5 w-5" />
+    ),
+    tone:
+      "border-rose-400/15 bg-rose-500/[0.055]",
+    iconTone:
+      "bg-rose-500/10 text-rose-300",
+    bar:
+      "from-rose-400 to-pink-400",
+    glow:
+      "bg-rose-400/10",
   },
 
   interesting: {
     label: "Interesting",
-    description: "Students are engaged",
-    color: "#8b5cf6",
-    bg: "bg-violet-500/10",
+    icon: (
+      <Sparkles className="h-5 w-5" />
+    ),
+    tone:
+      "border-violet-400/15 bg-violet-500/[0.055]",
+    iconTone:
+      "bg-violet-500/10 text-violet-300",
+    bar:
+      "from-violet-400 to-indigo-400",
+    glow:
+      "bg-violet-400/10",
   },
 }
 
-/* =========================================================
-   TYPE HELPERS
-========================================================= */
-
-function isSignalType(
-  value: unknown,
-): value is SignalType {
-  return (
-    value === "got_it" ||
-    value === "slightly_lost" ||
-    value === "confused" ||
-    value === "interesting"
-  )
-}
-
-function readString(
-  value: unknown,
-): string | undefined {
-  return typeof value === "string"
-    ? value
-    : undefined
-}
-
-function readNumber(
-  value: unknown,
-): number | undefined {
-  return typeof value === "number" &&
-    Number.isFinite(value)
-    ? value
-    : undefined
-}
-
-function readTimestamp(
-  value: unknown,
-): Timestamp | null | undefined {
-  if (value === null) {
-    return null
+function createEmptyCounts(): SignalCounts {
+  return {
+    ...EMPTY_SIGNAL_COUNTS,
   }
+}
 
-  if (value instanceof Timestamp) {
+function createInitialLiveStats(): LiveSignalStats {
+  return {
+    counts: createEmptyCounts(),
+    total: 0,
+    uniqueStudents: 0,
+  }
+}
+
+function toNumber(
+  value: unknown
+): number {
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value)
+  ) {
     return value
   }
 
-  return undefined
-}
+  if (typeof value === "string") {
+    const parsed = Number(value)
 
-function timestampToMillis(
-  timestamp?: Timestamp | null,
-): number {
-  return timestamp?.toMillis?.() ?? 0
-}
-
-/* =========================================================
-   SESSION MAPPER
-========================================================= */
-
-function mapSessionData(
-  id: string,
-  rawData: Record<string, unknown>,
-): Session {
-  const status =
-    rawData.status === "active" ||
-    rawData.status === "ended"
-      ? rawData.status
-      : undefined
-
-  const roundStatus =
-    rawData.roundStatus === "waiting" ||
-    rawData.roundStatus === "active" ||
-    rawData.roundStatus === "ended"
-      ? rawData.roundStatus
-      : undefined
-
-  const currentRound =
-    readNumber(
-      rawData.currentRound,
-    )
-
-  const participantCount =
-    readNumber(
-      rawData.participantCount,
-    )
-
-  return {
-    id,
-
-    adminId:
-      readString(
-        rawData.adminId,
-      ),
-
-    title:
-      readString(
-        rawData.title,
-      ),
-
-    courseCode:
-      readString(
-        rawData.courseCode,
-      ),
-
-    joinCode:
-      readString(
-        rawData.joinCode,
-      ),
-
-    status,
-
-    createdAt:
-      readTimestamp(
-        rawData.createdAt,
-      ),
-
-    startedAt:
-      readTimestamp(
-        rawData.startedAt,
-      ),
-
-    endedAt:
-      readTimestamp(
-        rawData.endedAt,
-      ),
-
-    aiSummary:
-      rawData.aiSummary === null
-        ? null
-        : readString(
-              rawData.aiSummary,
-            ) ?? null,
-
-    participantCount,
-
-    currentRound,
-
-    roundStatus,
-
-    roundTopic:
-      readString(
-        rawData.roundTopic,
-      ),
+    return Number.isFinite(parsed)
+      ? parsed
+      : 0
   }
+
+  return 0
 }
 
-/* =========================================================
-   ROOM STATE
-========================================================= */
+function toText(
+  value: unknown
+): string {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return ""
+  }
 
-function getRoomState(
+  if (typeof value === "string") {
+    return value.trim()
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value)
+  }
+
+  if (typeof value === "object") {
+    const record =
+      value as Record<
+        string,
+        unknown
+      >
+
+    if (
+      typeof record.text ===
+      "string"
+    ) {
+      return record.text.trim()
+    }
+
+    if (
+      typeof record.summary ===
+      "string"
+    ) {
+      return record.summary.trim()
+    }
+
+    if (
+      typeof record.content ===
+      "string"
+    ) {
+      return record.content.trim()
+    }
+
+    try {
+      return JSON.stringify(
+        value,
+        null,
+        2
+      )
+    } catch {
+      return ""
+    }
+  }
+
+  return ""
+}
+
+function createSnapshot(
+  round: number,
+  topic: string,
   counts: SignalCounts,
-  total: number,
-): RoomState {
-  if (total <= 0) {
-    return "waiting"
-  }
-
-  const confusion =
-    (counts.confused +
-      counts.slightly_lost) /
-    total
-
-  if (confusion > 0.5) {
-    return "red"
-  }
-
-  if (confusion > 0.25) {
-    return "yellow"
-  }
-
-  return "green"
-}
-
-/* =========================================================
-   ROOM STATE CONFIG
-========================================================= */
-
-function getRoomStateConfig(
-  state: RoomState,
-) {
-  switch (state) {
-    case "green":
-      return {
-        label: "Room is following",
-        dot: "bg-emerald-400",
-        text: "text-emerald-300",
-        bg: "bg-emerald-400/10",
-        border: "border-emerald-400/15",
-      }
-
-    case "yellow":
-      return {
-        label: "Some confusion",
-        dot: "bg-amber-400",
-        text: "text-amber-300",
-        bg: "bg-amber-400/10",
-        border: "border-amber-400/15",
-      }
-
-    case "red":
-      return {
-        label: "Significant confusion",
-        dot: "bg-rose-400",
-        text: "text-rose-300",
-        bg: "bg-rose-400/10",
-        border: "border-rose-400/15",
-      }
-
-    default:
-      return {
-        label: "Waiting for students",
-        dot: "bg-white/30",
-        text: "text-(--foreground-muted)",
-        bg: "bg-(--background-soft)",
-        border: "border-(--border)",
-      }
-  }
-}
-
-/* =========================================================
-   AGGREGATE CURRENT ROUND
-========================================================= */
-
-function aggregateCurrentRound(
-  docs: SignalDoc[],
-  currentRound: number,
-) {
-  const latestPerStudent =
-    new Map<string, SignalType>()
-
-  docs
-    .filter(
-      (item) =>
-        item.round === currentRound,
-    )
-    .sort(
-      (a, b) =>
-        timestampToMillis(
-          a.timestamp,
-        ) -
-        timestampToMillis(
-          b.timestamp,
-        ),
-    )
-    .forEach(
-      (item) => {
-        latestPerStudent.set(
-          item.studentId,
-          item.signal,
-        )
-      },
-    )
-
-  const counts: SignalCounts = {
-    ...EMPTY_COUNTS,
-  }
-
-  latestPerStudent.forEach(
-    (signal) => {
-      counts[signal] += 1
-    },
-  )
-
+  totalStudents: number
+): Snapshot {
   return {
-    counts,
-    uniqueStudents:
-      latestPerStudent.size,
+    round,
+    topic: topic.trim(),
+    got_it: counts.got_it,
+    slightly_lost:
+      counts.slightly_lost,
+    confused: counts.confused,
+    interesting:
+      counts.interesting,
+    total: totalStudents,
   }
 }
-
-/* =========================================================
-   ROUND HISTORY
-========================================================= */
-
-function buildRoundSnapshots(
-  docs: SignalDoc[],
-): RoundSnapshot[] {
-  const byRound =
-    new Map<number, SignalDoc[]>()
-
-  docs.forEach(
-    (item) => {
-      const round =
-        item.round || 1
-
-      if (!byRound.has(round)) {
-        byRound.set(
-          round,
-          [],
-        )
-      }
-
-      byRound
-        .get(round)!
-        .push(item)
-    },
-  )
-
-  return Array.from(
-    byRound.keys(),
-  )
-    .sort(
-      (a, b) => a - b,
-    )
-    .map(
-      (round) => {
-        const roundDocs =
-          byRound.get(
-            round,
-          ) ?? []
-
-        const latestPerStudent =
-          new Map<
-            string,
-            SignalType
-          >()
-
-        roundDocs
-          .slice()
-          .sort(
-            (a, b) =>
-              timestampToMillis(
-                a.timestamp,
-              ) -
-              timestampToMillis(
-                b.timestamp,
-              ),
-          )
-          .forEach(
-            (item) => {
-              latestPerStudent.set(
-                item.studentId,
-                item.signal,
-              )
-            },
-          )
-
-        const counts: SignalCounts =
-          {
-            ...EMPTY_COUNTS,
-          }
-
-        latestPerStudent.forEach(
-          (signal) => {
-            counts[signal] += 1
-          },
-        )
-
-        const total =
-          latestPerStudent.size
-
-        const confusion =
-          total > 0
-            ? Math.round(
-                ((counts.confused +
-                  counts.slightly_lost) /
-                  total) *
-                  100,
-              )
-            : 0
-
-        return {
-          round,
-          ...counts,
-          total,
-          confusion,
-        }
-      },
-    )
-}
-
-/* =========================================================
-   PAGE
-========================================================= */
 
 export default function AdminSessionPage() {
-  const router =
-    useRouter()
-
-  const params =
-    useParams()
+  const params = useParams()
+  const router = useRouter()
 
   const sessionId =
     typeof params.id === "string"
       ? params.id
-      : Array.isArray(
-            params.id,
-          )
-        ? params.id[0]
-        : ""
-
-  /* =======================================================
-     SESSION STATE
-  ======================================================= */
+      : ""
 
   const [
     session,
     setSession,
-  ] = useState<Session | null>(
-    null,
+  ] = useState<SessionView | null>(
+    null
   )
 
   const [
     loading,
     setLoading,
-  ] = useState(true)
-
-  const [
-    authChecked,
-    setAuthChecked,
-  ] = useState(false)
-
-  /* =======================================================
-     SIGNAL STATE
-  ======================================================= */
-
-  const [
-    signalDocs,
-    setSignalDocs,
-  ] = useState<SignalDoc[]>(
-    [],
+  ] = useState(
+    Boolean(sessionId)
   )
 
-  /* =======================================================
-     UI STATE
-  ======================================================= */
-
   const [
-    copied,
-    setCopied,
-  ] = useState(false)
+    error,
+    setError,
+  ] = useState<string | null>(
+    sessionId
+      ? null
+      : "Session ID is missing."
+  )
 
   const [
     ending,
@@ -595,773 +336,1110 @@ export default function AdminSessionPage() {
   ] = useState(false)
 
   const [
-    summaryLoading,
-    setSummaryLoading,
+    startingPulse,
+    setStartingPulse,
   ] = useState(false)
 
   const [
-    error,
-    setError,
+    endingPulse,
+    setEndingPulse,
+  ] = useState(false)
+
+  const [
+    topic,
+    setTopic,
   ] = useState("")
 
-  /* =======================================================
-     REFS
-  ======================================================= */
+  const [
+    liveStats,
+    setLiveStats,
+  ] = useState<LiveSignalStats>(
+    createInitialLiveStats
+  )
 
-  const signalDocsRef =
-    useRef<SignalDoc[]>([])
+  const [
+    roundCounts,
+    setRoundCounts,
+  ] = useState<SignalCounts>(
+    createEmptyCounts
+  )
 
-  const currentRoundRef =
-    useRef(1)
+  const [
+    roundSnapshots,
+    setRoundSnapshots,
+  ] = useState<Snapshot[]>([])
 
-  /* =======================================================
-     AUTH
-  ======================================================= */
+  const sessionRef =
+    useRef<SessionView | null>(
+      null
+    )
+
+  const liveStatsRef =
+    useRef<LiveSignalStats>(
+      createInitialLiveStats()
+    )
+
+  const roundCountsRef =
+    useRef<SignalCounts>(
+      createEmptyCounts()
+    )
+
+  const roundSnapshotsRef =
+    useRef<Snapshot[]>([])
+
+  const finishingPulseRef =
+    useRef(false)
+
+  const loadedSnapshotsRef =
+    useRef(false)
+
+  /*
+   * Keep current session available to
+   * Firestore listeners without causing
+   * subscription recreation.
+   */
+  useEffect(() => {
+    sessionRef.current =
+      session
+  }, [session])
+
+  /*
+   * =========================================================
+   * LOAD SESSION
+   * =========================================================
+   */
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        (user) => {
-          if (!user) {
-            router.replace(
-              "/login",
-            )
-
-            return
-          }
-
-          setAuthChecked(true)
-        },
-      )
-
-    return () =>
-      unsubscribe()
-  }, [router])
-
-  /* =======================================================
-     SESSION LISTENER
-
-     IMPORTANT:
-     No synchronous setState directly inside the effect.
-     State changes happen only from the Firestore callback.
-  ======================================================= */
-
-  useEffect(() => {
-    if (
-      !authChecked ||
-      !sessionId
-    ) {
+    if (!sessionId) {
       return
     }
 
-    const sessionRef =
+    const firestoreSessionRef =
       doc(
         db,
         "sessions",
-        sessionId,
+        sessionId
       )
 
     const unsubscribe =
       onSnapshot(
-        sessionRef,
+        firestoreSessionRef,
         (snapshot) => {
-          if (
-            !snapshot.exists()
-          ) {
+          if (!snapshot.exists()) {
+            setSession(null)
             setError(
-              "This classroom session no longer exists.",
+              "This session could not be found."
             )
-
             setLoading(false)
-
             return
           }
 
-          const rawData =
-            snapshot.data() as Record<
-              string,
-              unknown
-            >
+          const raw =
+            snapshot.data() as FirestoreSessionData
 
-          const nextSession =
-            mapSessionData(
+          const nextSession:
+            SessionView = {
+            id:
               snapshot.id,
-              rawData,
-            )
+
+            title:
+              typeof raw.title ===
+              "string"
+                ? raw.title
+                : "PulseBoard Session",
+
+            courseCode:
+              typeof raw.courseCode ===
+              "string"
+                ? raw.courseCode
+                : "",
+
+            joinCode:
+              typeof raw.joinCode ===
+              "string"
+                ? raw.joinCode
+                : "",
+
+            status:
+              raw.status,
+
+            participantCount:
+              toNumber(
+                raw.participantCount
+              ),
+
+            totalSignals:
+              toNumber(
+                raw.totalSignals
+              ),
+
+            aiSummary:
+              raw.aiSummary,
+
+            roundStatus:
+              raw.roundStatus ===
+              "active"
+                ? "active"
+                : raw.roundStatus ===
+                    "completed"
+                  ? "completed"
+                  : "waiting",
+
+            currentRound:
+              toNumber(
+                raw.currentRound
+              ),
+
+            roundTopic:
+              typeof raw.roundTopic ===
+              "string"
+                ? raw.roundTopic
+                : "",
+
+            roundStartedAt:
+              raw.roundStartedAt,
+
+            roundEndedAt:
+              raw.roundEndedAt,
+
+            raw,
+          }
 
           setSession(
-            nextSession,
+            nextSession
           )
 
-          const firestoreRound =
-            Number(
-              nextSession.currentRound ??
-                1,
-            )
-
-          currentRoundRef.current =
-            firestoreRound > 0
-              ? firestoreRound
-              : 1
-
+          setError(null)
           setLoading(false)
         },
         (snapshotError) => {
           console.error(
-            "Session listener error:",
-            snapshotError,
+            "Failed to load session:",
+            snapshotError
           )
 
           setError(
-            "Unable to load this classroom session.",
+            "Unable to load this session."
           )
 
           setLoading(false)
-        },
+        }
       )
 
-    return () =>
-      unsubscribe()
-  }, [
-    authChecked,
-    sessionId,
-  ])
+    return unsubscribe
+  }, [sessionId])
 
-  /* =======================================================
-     LIVE SIGNAL LISTENER
-
-     Firestore is the external source.
-     Signal docs are the only signal state we store.
-     Counts are derived below with useMemo.
-  ======================================================= */
+  /*
+   * =========================================================
+   * LOAD SAVED SNAPSHOTS
+   * =========================================================
+   */
 
   useEffect(() => {
     if (
-      !authChecked ||
-      !sessionId
+      !sessionId ||
+      loadedSnapshotsRef.current
     ) {
       return
     }
 
-    const signalsQuery =
-      query(
-        collection(
-          db,
-          "signals",
-        ),
-        where(
-          "sessionId",
-          "==",
-          sessionId,
-        ),
-      )
+    loadedSnapshotsRef.current =
+      true
 
-    const unsubscribe =
-      onSnapshot(
-        signalsQuery,
-        (snapshot) => {
-          const docs =
-            snapshot.docs.flatMap(
-              (item) => {
-                const rawData =
-                  item.data() as Record<
-                    string,
-                    unknown
-                  >
-
-                const signal =
-                  rawData.signal
-
-                if (
-                  !isSignalType(
-                    signal,
-                  )
-                ) {
-                  return []
-                }
-
-                const studentId =
-                  readString(
-                    rawData.studentId,
-                  )
-
-                if (
-                  !studentId
-                ) {
-                  return []
-                }
-
-                const roundValue =
-                  readNumber(
-                    rawData.round,
-                  )
-
-                return [
-                  {
-                    studentId,
-                    signal,
-                    round:
-                      roundValue &&
-                      roundValue > 0
-                        ? roundValue
-                        : 1,
-                    timestamp:
-                      readTimestamp(
-                        rawData.timestamp,
-                      ),
-                  },
-                ]
-              },
-            )
-
-          signalDocsRef.current =
-            docs
-
-          setSignalDocs(
-            docs,
-          )
-
-          /*
-           * Keep the participant count synchronized
-           * with Firestore.
-           *
-           * This is intentionally inside the Firestore
-           * callback because it is reacting to an external
-           * system update.
-           */
-          const round =
-            currentRoundRef.current
-
-          const {
-            uniqueStudents,
-          } =
-            aggregateCurrentRound(
-              docs,
-              round,
-            )
-
-          updateDoc(
-            doc(
+    const loadSnapshots =
+      async () => {
+        try {
+          const snapshotRef =
+            collection(
               db,
               "sessions",
               sessionId,
-            ),
-            {
-              participantCount:
-                uniqueStudents,
-            },
-          ).catch(
-            (updateError) => {
-              console.warn(
-                "Participant count sync skipped:",
-                updateError,
+              "snapshots"
+            )
+
+          const snapshot =
+            await getDocs(
+              snapshotRef
+            )
+
+          const snapshots =
+            snapshot.docs
+              .map(
+                (
+                  snapshotDoc
+                ) => {
+                  const data =
+                    snapshotDoc.data()
+
+                  return {
+                    round:
+                      toNumber(
+                        data.round
+                      ),
+
+                    topic:
+                      typeof data.topic ===
+                      "string"
+                        ? data.topic
+                        : "",
+
+                    got_it:
+                      toNumber(
+                        data.got_it
+                      ),
+
+                    slightly_lost:
+                      toNumber(
+                        data.slightly_lost
+                      ),
+
+                    confused:
+                      toNumber(
+                        data.confused
+                      ),
+
+                    interesting:
+                      toNumber(
+                        data.interesting
+                      ),
+
+                    total:
+                      toNumber(
+                        data.total
+                      ),
+                  } satisfies Snapshot
+                }
               )
-            },
+              .filter(
+                (
+                  item
+                ) =>
+                  item.round > 0
+              )
+              .sort(
+                (
+                  a,
+                  b
+                ) =>
+                  a.round -
+                  b.round
+              )
+
+          roundSnapshotsRef.current =
+            snapshots
+
+          setRoundSnapshots(
+            snapshots
+          )
+        } catch (
+          snapshotError
+        ) {
+          console.error(
+            "Failed to load round snapshots:",
+            snapshotError
+          )
+        }
+      }
+
+    void loadSnapshots()
+  }, [sessionId])
+
+  /*
+   * =========================================================
+   * LIVE FIRESTORE SIGNALS
+   * =========================================================
+   *
+   * Every Firestore update recalculates:
+   *
+   * 1. all-session totals
+   * 2. current-round totals
+   *
+   * No "new signal ID" tracking.
+   */
+
+  useEffect(() => {
+    if (!sessionId) {
+      return
+    }
+
+    const unsubscribe =
+      subscribeToSessionSignals(
+        sessionId,
+        (
+          signals: Signal[]
+        ) => {
+          const currentSession =
+            sessionRef.current
+
+          /*
+           * -----------------------------------------
+           * ALL SESSION SIGNALS
+           * -----------------------------------------
+           */
+
+          const allCounts =
+            createEmptyCounts()
+
+          signals.forEach(
+            (
+              signal
+            ) => {
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  allCounts,
+                  signal.signal
+                )
+              ) {
+                allCounts[
+                  signal.signal
+                ] += 1
+              }
+            }
+          )
+
+          const totalSignals =
+            getTotalSignalCount(
+              allCounts
+            )
+
+          const totalStudents =
+            getUniqueStudentCount(
+              signals
+            )
+
+          /*
+           * -----------------------------------------
+           * CURRENT ROUND SIGNALS
+           * -----------------------------------------
+           */
+
+          const currentRound =
+            currentSession
+              ?.currentRound ??
+            0
+
+          const currentRoundSignals =
+            currentSession?.roundStatus ===
+              "active" &&
+            currentRound > 0
+              ? signals.filter(
+                  (
+                    signal
+                  ) =>
+                    signal.round ===
+                    currentRound
+                )
+              : []
+
+          const currentRoundCounts =
+            createEmptyCounts()
+
+          currentRoundSignals.forEach(
+            (
+              signal
+            ) => {
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  currentRoundCounts,
+                  signal.signal
+                )
+              ) {
+                currentRoundCounts[
+                  signal.signal
+                ] += 1
+              }
+            }
+          )
+
+          const currentRoundStudents =
+            getUniqueStudentCount(
+              currentRoundSignals
+            )
+
+          /*
+           * -----------------------------------------
+           * UPDATE UI STATE
+           * -----------------------------------------
+           */
+
+          const nextStats:
+            LiveSignalStats =
+            {
+              counts:
+                allCounts,
+
+              total:
+                totalSignals,
+
+              uniqueStudents:
+                totalStudents,
+            }
+
+          liveStatsRef.current =
+            nextStats
+
+          setLiveStats(
+            nextStats
+          )
+
+          if (
+            currentSession?.roundStatus ===
+            "active"
+          ) {
+            roundCountsRef.current =
+              currentRoundCounts
+
+            setRoundCounts(
+              currentRoundCounts
+            )
+          } else {
+            const emptyCounts =
+              createEmptyCounts()
+
+            roundCountsRef.current =
+              emptyCounts
+
+            setRoundCounts(
+              emptyCounts
+            )
+          }
+
+          /*
+           * -----------------------------------------
+           * KEEP SESSION AGGREGATES IN FIRESTORE
+           * -----------------------------------------
+           *
+           * participantCount = unique students
+           * across entire session.
+           */
+
+          if (
+            currentSession
+          ) {
+            void updateDoc(
+              doc(
+                db,
+                "sessions",
+                sessionId
+              ),
+              {
+                participantCount:
+                  totalStudents,
+
+                totalSignals:
+                  totalSignals,
+              }
+            ).catch(
+              (
+                updateError
+              ) => {
+                console.error(
+                  "Failed to update session aggregates:",
+                  updateError
+                )
+              }
+            )
+          }
+
+          /*
+           * Logging during development.
+           * Useful for confirming live data.
+           */
+          console.debug(
+            "PulseBoard live signals:",
+            {
+              allSignals:
+                totalSignals,
+
+              allStudents:
+                totalStudents,
+
+              currentRound,
+
+              currentRoundSignals:
+                currentRoundSignals.length,
+
+              currentRoundStudents,
+
+              currentRoundCounts,
+            }
           )
         },
-        (snapshotError) => {
+        (
+          signalError
+        ) => {
           console.error(
-            "Signal listener error:",
-            snapshotError,
+            "Signal subscription failed:",
+            signalError
           )
 
           setError(
-            "Live classroom signals could not be loaded.",
+            "Unable to receive live classroom signals."
           )
-        },
+        }
       )
 
-    return () =>
-      unsubscribe()
-  }, [
-    authChecked,
-    sessionId,
-  ])
+    return unsubscribe
+  }, [sessionId])
 
-  /* =======================================================
-     CURRENT ROUND
-  ======================================================= */
+  /*
+   * =========================================================
+   * SAVE CURRENT ROUND SNAPSHOT
+   * =========================================================
+   */
 
-  const currentRound =
-    Number(
-      session?.currentRound ??
-        1,
-    ) > 0
-      ? Number(
-          session?.currentRound ??
-            1,
-        )
-      : 1
+  const persistRoundSnapshot =
+    useCallback(
+      async (
+        force = false
+      ): Promise<Snapshot | null> => {
+        const currentSession =
+          sessionRef.current
 
-  /* =======================================================
-     DERIVED LIVE DATA
+        if (
+          !sessionId ||
+          !currentSession
+        ) {
+          return null
+        }
 
-     IMPORTANT:
-     These values are NOT stored in state.
-     They are calculated from existing React state.
-     This removes the setState-in-effect error.
-  ======================================================= */
+        if (
+          currentSession.currentRound <=
+          0
+        ) {
+          return null
+        }
 
-  const {
-    counts: signalCounts,
-    uniqueStudents:
-      participantCount,
-  } = useMemo(
-    () =>
-      aggregateCurrentRound(
-        signalDocs,
-        currentRound,
-      ),
-    [
-      signalDocs,
-      currentRound,
-    ],
-  )
+        const currentTopic =
+          currentSession.roundTopic.trim()
 
-  const roundSnapshots =
-    useMemo(
-      () =>
-        buildRoundSnapshots(
-          signalDocs,
-        ),
-      [signalDocs],
-    )
+        if (!currentTopic) {
+          return null
+        }
 
-  const trendData =
-    useMemo(
-      () =>
-        roundSnapshots.map(
-          (snapshot) => ({
-            round:
-              snapshot.round,
+        const counts =
+          roundCountsRef.current
 
-            confusion:
-              snapshot.confusion,
-          }),
-        ),
-      [roundSnapshots],
-    )
-
-  /* =======================================================
-     DERIVED SESSION VALUES
-  ======================================================= */
-
-  const roundStatus =
-    session?.roundStatus ??
-    (session?.status ===
-    "active"
-      ? "active"
-      : "ended")
-
-  const isEnded =
-    session?.status ===
-    "ended"
-
-  const isRoundActive =
-    !isEnded &&
-    roundStatus ===
-      "active"
-
-  const roundTopic =
-    session?.roundTopic ??
-    ""
-
-  const sessionTitle =
-    session?.title ??
-    "Live Classroom Session"
-
-  const courseCode =
-    session?.courseCode ??
-    "CLASSROOM"
-
-  const joinCode =
-    session?.joinCode ??
-    "------"
-
-  const totalSignals =
-    Object.values(
-      signalCounts,
-    ).reduce(
-      (
-        total,
-        value,
-      ) =>
-        total + value,
-      0,
-    )
-
-  const roomState =
-    getRoomState(
-      signalCounts,
-      totalSignals,
-    )
-
-  const roomConfig =
-    getRoomStateConfig(
-      roomState,
-    )
-
-  const confusionPercentage =
-    totalSignals > 0
-      ? Math.round(
-          ((signalCounts.confused +
-            signalCounts.slightly_lost) /
-            totalSignals) *
-            100,
-        )
-      : 0
-
-  /* =======================================================
-     COPY JOIN CODE
-  ======================================================= */
-
-  const handleCopy =
-    async () => {
-      if (!joinCode) {
-        return
-      }
-
-      try {
-        await navigator.clipboard.writeText(
-          joinCode,
-        )
-
-        setCopied(true)
-
-        window.setTimeout(
-          () => {
-            setCopied(false)
-          },
-          1800,
-        )
-      } catch (copyError) {
-        console.error(
-          "Copy failed:",
-          copyError,
-        )
-      }
-    }
-
-  /* =======================================================
-     END SESSION
-  ======================================================= */
-
-  const handleEndSession =
-    async () => {
-      if (
-        !session ||
-        !sessionId ||
-        ending ||
-        isEnded
-      ) {
-        return
-      }
-
-      const shouldEnd =
-        window.confirm(
-          "End this classroom session? Students will no longer be able to submit new pulses.",
-        )
-
-      if (!shouldEnd) {
-        return
-      }
-
-      setEnding(true)
-      setSummaryLoading(true)
-      setError("")
-
-      try {
-        const docs =
-          signalDocsRef.current
-
-        const snapshots =
-          buildRoundSnapshots(
-            docs,
+        const total =
+          getTotalSignalCount(
+            counts
           )
 
-        const finalRound =
-          currentRoundRef.current
+        if (
+          !force &&
+          total === 0
+        ) {
+          return null
+        }
 
-        const finalRoundDocs =
-          docs.filter(
-            (item) =>
-              item.round ===
-              finalRound,
+        const alreadySaved =
+          roundSnapshotsRef.current.some(
+            (
+              snapshot
+            ) =>
+              snapshot.round ===
+              currentSession.currentRound
           )
 
-        const latestPerStudent =
-          new Map<
-            string,
-            SignalType
-          >()
-
-        finalRoundDocs
-          .slice()
-          .sort(
-            (a, b) =>
-              timestampToMillis(
-                a.timestamp,
-              ) -
-              timestampToMillis(
-                b.timestamp,
-              ),
+        if (
+          alreadySaved
+        ) {
+          return (
+            roundSnapshotsRef.current.find(
+              (
+                snapshot
+              ) =>
+                snapshot.round ===
+                currentSession.currentRound
+            ) ?? null
           )
-          .forEach(
-            (item) => {
-              latestPerStudent.set(
-                item.studentId,
-                item.signal,
-              )
-            },
+        }
+
+        /*
+         * Use current-round students first.
+         * Fall back to session-level students.
+         */
+        const currentRoundStudents =
+          getUniqueStudentCountFromRound(
+            currentSession.currentRound,
+            currentSession
           )
 
-        const finalCounts: SignalCounts =
-          {
-            ...EMPTY_COUNTS,
-          }
+        const totalStudents =
+          currentRoundStudents ??
+          Math.max(
+            liveStatsRef.current
+              .uniqueStudents,
+            currentSession
+              .participantCount
+          )
 
-        latestPerStudent.forEach(
-          (signal) => {
-            finalCounts[signal] += 1
-          },
-        )
-
-        /* -------------------------------------------------
-           SAVE FINAL ROUND SNAPSHOT
-        ------------------------------------------------- */
+        const snapshot =
+          createSnapshot(
+            currentSession.currentRound,
+            currentTopic,
+            counts,
+            totalStudents
+          )
 
         await addDoc(
           collection(
             db,
             "sessions",
             sessionId,
-            "snapshots",
+            "snapshots"
           ),
           {
-            timestamp:
+            ...snapshot,
+            createdAt:
               serverTimestamp(),
-
-            round:
-              finalRound,
-
-            ...finalCounts,
-
-            total:
-              latestPerStudent.size,
-          },
-        ).catch(
-          (snapshotError) => {
-            console.warn(
-              "Final snapshot could not be saved:",
-              snapshotError,
-            )
-          },
+          }
         )
 
-        /* -------------------------------------------------
-           END SESSION
-        ------------------------------------------------- */
+        const nextSnapshots =
+          [
+            ...roundSnapshotsRef.current,
+            snapshot,
+          ]
 
-        await updateDoc(
-          doc(
-            db,
-            "sessions",
-            sessionId,
-          ),
-          {
-            status:
-              "ended",
+        roundSnapshotsRef.current =
+          nextSnapshots
 
-            roundStatus:
-              "ended",
-
-            endedAt:
-              serverTimestamp(),
-          },
+        setRoundSnapshots(
+          nextSnapshots
         )
 
-        /* -------------------------------------------------
-           AI SUMMARY PAYLOAD
-        ------------------------------------------------- */
+        return snapshot
+      },
+      [sessionId]
+    )
 
-        const fallbackCounts =
-          aggregateCurrentRound(
-            docs,
-            finalRound,
-          ).counts
+  /*
+   * =========================================================
+   * START PULSE
+   * =========================================================
+   */
 
-        const fallbackTotal =
-          Object.values(
-            fallbackCounts,
-          ).reduce(
-            (
-              total,
-              value,
-            ) =>
-              total + value,
-            0,
+  const handleStartPulse =
+    useCallback(
+      async () => {
+        const currentSession =
+          sessionRef.current
+
+        const cleanTopic =
+          topic.trim()
+
+        if (
+          !currentSession ||
+          startingPulse ||
+          currentSession.status !==
+            "active" ||
+          currentSession.roundStatus ===
+            "active"
+        ) {
+          return
+        }
+
+        if (!cleanTopic) {
+          setError(
+            "Enter a teaching topic before starting the pulse."
           )
 
-        const snapshotsForApi =
-          snapshots.length > 0
-            ? snapshots.map(
-                (
-                  snapshot,
-                ) => ({
-                  round:
-                    snapshot.round,
+          return
+        }
 
-                  got_it:
-                    snapshot.got_it,
+        if (
+          cleanTopic.length > 120
+        ) {
+          setError(
+            "Topic must be 120 characters or less."
+          )
 
-                  slightly_lost:
-                    snapshot.slightly_lost,
-
-                  confused:
-                    snapshot.confused,
-
-                  interesting:
-                    snapshot.interesting,
-
-                  total:
-                    snapshot.total,
-                }),
-              )
-            : [
-                {
-                  round:
-                    finalRound,
-
-                  got_it:
-                    fallbackCounts.got_it,
-
-                  slightly_lost:
-                    fallbackCounts.slightly_lost,
-
-                  confused:
-                    fallbackCounts.confused,
-
-                  interesting:
-                    fallbackCounts.interesting,
-
-                  total:
-                    fallbackTotal,
-                },
-              ]
-
-        /* -------------------------------------------------
-           GENERATE AI SUMMARY
-        ------------------------------------------------- */
+          return
+        }
 
         try {
-          const response =
-            await fetch(
-              "/api/generate-summary",
-              {
-                method:
-                  "POST",
+          setStartingPulse(
+            true
+          )
 
-                headers: {
-                  "Content-Type":
-                    "application/json",
-                },
+          setError(null)
 
-                body: JSON.stringify({
-                  sessionId,
+          /*
+           * Fresh counter for the next round.
+           */
 
-                  snapshots:
-                    snapshotsForApi,
+          const emptyCounts =
+            createEmptyCounts()
 
-                  sessionTitle,
+          roundCountsRef.current =
+            emptyCounts
 
-                  courseCode,
-                }),
-              },
-            )
+          setRoundCounts(
+            emptyCounts
+          )
 
-          if (
-            !response.ok
-          ) {
-            console.error(
-              "AI summary API returned:",
-              response.status,
-            )
-          }
-        } catch (summaryError) {
+          const nextRound =
+            currentSession.currentRound +
+            1
+
+          await updateDoc(
+            doc(
+              db,
+              "sessions",
+              currentSession.id
+            ),
+            {
+              roundStatus:
+                "active",
+
+              currentRound:
+                nextRound,
+
+              roundTopic:
+                cleanTopic,
+
+              roundStartedAt:
+                serverTimestamp(),
+
+              roundEndedAt:
+                null,
+            }
+          )
+
+          /*
+           * Topic is now stored in Firestore,
+           * so it remains visible after refresh.
+           */
+
+          setTopic("")
+        } catch (
+          startError
+        ) {
           console.error(
-            "AI summary generation failed:",
-            summaryError,
+            "Failed to start pulse:",
+            startError
+          )
+
+          setError(
+            "Unable to start the pulse. Please try again."
+          )
+        } finally {
+          setStartingPulse(
+            false
           )
         }
-      } catch (endError) {
-        console.error(
-          "Failed to end session:",
-          endError,
+      },
+      [
+        topic,
+        startingPulse,
+      ]
+    )
+
+  /*
+   * =========================================================
+   * FINISH PULSE
+   * =========================================================
+   *
+   * Manual only.
+   */
+
+  const handleFinishPulse =
+    useCallback(
+      async () => {
+        const currentSession =
+          sessionRef.current
+
+        if (
+          !currentSession ||
+          endingPulse ||
+          finishingPulseRef.current ||
+          currentSession.status !==
+            "active" ||
+          currentSession.roundStatus !==
+            "active"
+        ) {
+          return
+        }
+
+        finishingPulseRef.current =
+          true
+
+        try {
+          setEndingPulse(
+            true
+          )
+
+          setError(null)
+
+          await persistRoundSnapshot(
+            true
+          )
+
+          await updateDoc(
+            doc(
+              db,
+              "sessions",
+              currentSession.id
+            ),
+            {
+              roundStatus:
+                "completed",
+
+              roundEndedAt:
+                serverTimestamp(),
+            }
+          )
+
+          /*
+           * Clear current-round UI only.
+           * Topic stays in Firestore/history.
+           */
+
+          const emptyCounts =
+            createEmptyCounts()
+
+          roundCountsRef.current =
+            emptyCounts
+
+          setRoundCounts(
+            emptyCounts
+          )
+        } catch (
+          finishError
+        ) {
+          console.error(
+            "Failed to finish pulse:",
+            finishError
+          )
+
+          setError(
+            "Unable to complete this pulse. Please try again."
+          )
+        } finally {
+          finishingPulseRef.current =
+            false
+
+          setEndingPulse(
+            false
+          )
+        }
+      },
+      [
+        endingPulse,
+        persistRoundSnapshot,
+      ]
+    )
+
+  /*
+   * =========================================================
+   * END ENTIRE SESSION
+   * =========================================================
+   */
+
+  const handleEndSession =
+    useCallback(
+      async () => {
+        const currentSession =
+          sessionRef.current
+
+        if (
+          !currentSession ||
+          ending
+        ) {
+          return
+        }
+
+        const confirmed =
+          window.confirm(
+            "End this classroom session? The current pulse will be saved and the AI teaching report will be generated."
+          )
+
+        if (!confirmed) {
+          return
+        }
+
+        try {
+          setEnding(true)
+          setError(null)
+
+          if (
+            currentSession.roundStatus ===
+            "active"
+          ) {
+            await persistRoundSnapshot(
+              true
+            )
+
+            await updateDoc(
+              doc(
+                db,
+                "sessions",
+                currentSession.id
+              ),
+              {
+                roundStatus:
+                  "completed",
+
+                roundEndedAt:
+                  serverTimestamp(),
+              }
+            )
+          }
+
+          const snapshots =
+            [
+              ...roundSnapshotsRef.current,
+            ]
+
+          let aiSummary = ""
+
+          if (
+            snapshots.length > 0
+          ) {
+            try {
+              aiSummary =
+                await generateSummary(
+                  {
+                    sessionId:
+                      currentSession.id,
+
+                    sessionTitle:
+                      currentSession.title,
+
+                    courseCode:
+                      currentSession.courseCode,
+
+                    snapshots,
+                  }
+                )
+            } catch (
+              summaryError
+            ) {
+              console.error(
+                "AI summary generation failed:",
+                summaryError
+              )
+            }
+          }
+
+          await updateDoc(
+            doc(
+              db,
+              "sessions",
+              currentSession.id
+            ),
+            {
+              status:
+                "ended",
+
+              endedAt:
+                serverTimestamp(),
+
+              ...(aiSummary
+                ? {
+                    aiSummary,
+                  }
+                : {}),
+            }
+          )
+        } catch (
+          endError
+        ) {
+          console.error(
+            "Failed to end session:",
+            endError
+          )
+
+          setError(
+            "Unable to end the session. Please try again."
+          )
+        } finally {
+          setEnding(false)
+        }
+      },
+      [
+        ending,
+        persistRoundSnapshot,
+      ]
+    )
+
+  /*
+   * =========================================================
+   * DERIVED STATE
+   * =========================================================
+   */
+
+  const isActive =
+    session?.status ===
+    "active"
+
+  const isPulseActive =
+    Boolean(
+      isActive &&
+        session?.roundStatus ===
+          "active"
+    )
+
+  const participantCount =
+    liveStats.uniqueStudents
+
+  const totalSignals =
+    liveStats.total
+
+  const currentPulseTotal =
+    getTotalSignalCount(
+      roundCounts
+    )
+
+  const confusionRate =
+    currentPulseTotal >
+    0
+      ? Math.round(
+          ((roundCounts.confused +
+            roundCounts.slightly_lost) /
+            currentPulseTotal) *
+            100
         )
+      : 0
 
-        setError(
-          endError instanceof
-            Error
-            ? endError.message
-            : "Unable to end this session.",
-        )
-      } finally {
-        setSummaryLoading(
-          false,
-        )
+  const aiSummaryText =
+    toText(
+      session?.aiSummary
+    )
 
-        setEnding(false)
-      }
-    }
+  /*
+   * =========================================================
+   * LOADING
+   * =========================================================
+   */
 
-  /* =======================================================
-     LOADING
-  ======================================================= */
-
-  if (
-    loading ||
-    !authChecked
-  ) {
+  if (loading) {
     return (
-      <main className="min-h-screen bg-(--background) text-(--foreground)">
-        <div className="flex min-h-screen items-center justify-center px-6">
-          <div className="surface w-full max-w-sm rounded-[2rem] p-8 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
-              <Wifi className="h-6 w-6 animate-pulse" />
-            </div>
-
-            <p className="mt-5 text-sm font-black">
-              Loading classroom
-            </p>
-
-            <p className="mt-2 text-xs text-(--foreground-muted)">
-              Connecting to the live faculty dashboard...
-            </p>
-
-            <div className="mx-auto mt-5 h-1.5 w-32 overflow-hidden rounded-full bg-(--background-soft)">
-              <div className="h-full w-1/2 animate-pulse rounded-full bg-violet-500" />
-            </div>
-          </div>
-        </div>
+      <main className="app-shell flex min-h-screen items-center justify-center">
+        <Loading
+          size="lg"
+          label="Loading classroom..."
+        />
       </main>
     )
   }
 
-  /* =======================================================
-     ERROR
-  ======================================================= */
+  /*
+   * =========================================================
+   * MISSING SESSION
+   * =========================================================
+   */
 
-  if (
-    error &&
-    !session
-  ) {
+  if (!session) {
     return (
-      <main className="min-h-screen bg-(--background) text-(--foreground)">
-        <div className="flex min-h-screen items-center justify-center px-6">
-          <div className="surface w-full max-w-md rounded-[2rem] p-8 text-center">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-rose-500/10 text-rose-300">
-              <Radio className="h-7 w-7" />
+      <main className="app-shell flex min-h-screen items-center justify-center px-5">
+        <div className="surface relative w-full max-w-md overflow-hidden rounded-[2rem] p-8 text-center">
+          <div className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-rose-500/10 blur-3xl" />
+
+          <div className="relative z-10">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl border border-rose-400/10 bg-rose-500/10 text-rose-300">
+              <XCircle className="h-7 w-7" />
             </div>
 
             <p className="mt-6 text-[10px] font-black uppercase tracking-[0.2em] text-rose-300">
@@ -1369,113 +1447,75 @@ export default function AdminSessionPage() {
             </p>
 
             <h1 className="mt-2 text-2xl font-black">
-              Session could not be loaded
+              Session unavailable
             </h1>
 
             <p className="mt-3 text-sm leading-6 text-(--foreground-muted)">
-              {error}
+              {error ||
+                "We could not find this classroom session."}
             </p>
 
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  "/admin/dashboard",
-                )
-              }
-              className="mt-7 inline-flex items-center gap-2 rounded-2xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 py-3 text-xs font-black text-white shadow-lg shadow-violet-500/20 transition hover:-translate-y-0.5"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back to dashboard
-            </button>
+            <div className="mt-7">
+              <Button
+                onClick={() =>
+                  router.push(
+                    "/admin/dashboard"
+                  )
+                }
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to dashboard
+              </Button>
+            </div>
           </div>
         </div>
       </main>
     )
   }
 
-  /* =======================================================
-     SAFETY
-  ======================================================= */
+  const currentSession =
+    session
 
-  if (!session) {
-    return null
-  }
-
-  /* =======================================================
-     PAGE
-  ======================================================= */
+  /*
+   * =========================================================
+   * PAGE
+   * =========================================================
+   */
 
   return (
-    <main className="min-h-screen bg-(--background) text-(--foreground)">
-      {/* =====================================================
-          HEADER
-      ===================================================== */}
+    <main className="app-shell min-h-screen">
+      <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
 
-      <header className="sticky top-0 z-30 border-b border-(--border) bg-(--background)/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  "/admin/dashboard",
-                )
-              }
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-(--border) bg-(--surface) text-(--foreground-muted) transition hover:border-violet-400/30 hover:text-(--foreground)"
-              aria-label="Back to dashboard"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
+        {/* TOP BAR */}
+        <header className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() =>
+              router.push(
+                "/admin/dashboard"
+              )
+            }
+            className="group inline-flex items-center gap-2 rounded-2xl border border-(--border) bg-(--surface) px-4 py-2.5 text-xs font-bold text-(--foreground-secondary) transition-all hover:border-(--border-strong) hover:bg-(--surface-hover) hover:text-(--foreground)"
+          >
+            <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
 
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-violet-500 to-indigo-600 text-white shadow-lg shadow-violet-500/20">
-              <Wifi className="h-5 w-5" />
-            </div>
+            Dashboard
+          </button>
 
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black">
-                Faculty Command Center
-              </p>
+          <div className="flex items-center gap-2">
+            {isActive && (
+              <span className="hidden items-center gap-2 rounded-full border border-emerald-400/10 bg-emerald-400/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-wider text-emerald-300 sm:flex">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                Classroom live
+              </span>
+            )}
 
-              <p className="truncate text-[10px] text-(--foreground-muted)">
-                {courseCode} ·{" "}
-                {sessionTitle}
-              </p>
-            </div>
+            <ThemeToggle />
           </div>
+        </header>
 
-          <div className="flex shrink-0 items-center gap-2">
-            <span
-              className={[
-                "hidden items-center gap-2 rounded-full border px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] sm:flex",
-                isEnded
-                  ? "border-(--border) bg-(--background-soft) text-(--foreground-muted)"
-                  : "border-emerald-400/15 bg-emerald-400/10 text-emerald-300",
-              ].join(" ")}
-            >
-              <span
-                className={[
-                  "h-1.5 w-1.5 rounded-full",
-                  isEnded
-                    ? "bg-(--foreground-subtle)"
-                    : "animate-pulse bg-emerald-400",
-                ].join(" ")}
-              />
-
-              {isEnded
-                ? "Ended"
-                : "Live"}
-            </span>
-          </div>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        {/* =====================================================
-            HERO
-        ===================================================== */}
-
-        <section className="relative overflow-hidden rounded-[2rem] border border-violet-400/10 bg-linear-to-br from-violet-600/[0.14] via-(--surface) to-indigo-600/[0.10] p-6 shadow-(--shadow-lg) sm:p-8">
+        {/* HERO */}
+        <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-violet-400/10 bg-linear-to-br from-violet-600/[0.14] via-(--surface) to-indigo-600/[0.10] p-6 shadow-(--shadow-lg) sm:p-8 lg:p-10">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-violet-500/15 blur-3xl"
@@ -1483,748 +1523,768 @@ export default function AdminSessionPage() {
 
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute -bottom-28 left-1/3 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl"
+            className="pointer-events-none absolute bottom-0 left-1/3 h-48 w-48 rounded-full bg-indigo-500/8 blur-3xl"
           />
 
-          <div className="relative">
-            <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex flex-col gap-7 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={[
+                    "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em]",
+                    isActive
+                      ? "border-emerald-400/10 bg-emerald-400/10 text-emerald-300"
+                      : "border-(--border) bg-(--background-soft) text-(--foreground-muted)",
+                  ].join(" ")}
+                >
                   <span
                     className={[
-                      "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em]",
-                      isEnded
-                        ? "border-(--border) bg-(--background-soft) text-(--foreground-muted)"
-                        : "border-emerald-400/15 bg-emerald-400/10 text-emerald-300",
+                      "h-1.5 w-1.5 rounded-full",
+                      isActive
+                        ? "animate-pulse bg-emerald-400"
+                        : "bg-(--foreground-subtle)",
                     ].join(" ")}
-                  >
-                    <span
-                      className={[
-                        "h-1.5 w-1.5 rounded-full",
-                        isEnded
-                          ? "bg-(--foreground-subtle)"
-                          : "animate-pulse bg-emerald-400",
-                      ].join(" ")}
-                    />
-
-                    {isEnded
-                      ? "Session complete"
-                      : "Live classroom"}
-                  </span>
-
-                  <span className="rounded-full border border-violet-400/10 bg-violet-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
-                    {courseCode}
-                  </span>
-
-                  {!isEnded && (
-                    <span className="rounded-full border border-indigo-400/10 bg-indigo-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-indigo-300">
-                      Round{" "}
-                      {currentRound}
-                    </span>
-                  )}
-                </div>
-
-                <h1 className="mt-5 max-w-4xl text-3xl font-black tracking-[-0.04em] sm:text-4xl lg:text-5xl">
-                  {sessionTitle}
-                </h1>
-
-                <p className="mt-4 max-w-2xl text-sm leading-7 text-(--foreground-muted) sm:text-base">
-                  Monitor the classroom pulse in real time while students respond anonymously.
-                </p>
-
-                <div className="mt-6 flex flex-wrap gap-2">
-                  <InfoChip
-                    icon={
-                      <Users className="h-3.5 w-3.5" />
-                    }
-                    label={`${participantCount} students`}
                   />
 
-                  <InfoChip
-                    icon={
-                      <Radio className="h-3.5 w-3.5" />
-                    }
-                    label={`Room ${joinCode}`}
-                  />
+                  {isActive
+                    ? "Live session"
+                    : "Session ended"}
+                </span>
 
+                <span className="rounded-full border border-violet-400/10 bg-violet-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
+                  {currentSession.courseCode ||
+                    "COURSE"}
+                </span>
+
+                {isPulseActive && (
+                  <span className="rounded-full border border-indigo-400/10 bg-indigo-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-indigo-300">
+                    Round{" "}
+                    {
+                      currentSession.currentRound
+                    }
+                  </span>
+                )}
+              </div>
+
+              <h1 className="mt-5 max-w-4xl text-3xl font-black tracking-[-0.04em] sm:text-4xl lg:text-5xl">
+                {currentSession.title}
+              </h1>
+
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-(--foreground-muted) sm:text-base">
+                {isActive
+                  ? isPulseActive
+                    ? `Students are responding to “${currentSession.roundTopic}”.`
+                    : currentSession.currentRound ===
+                        0
+                      ? "Your classroom is ready. Enter the first teaching topic and manually start the pulse when you are ready."
+                      : "The previous pulse is complete. Enter the next teaching topic and manually start another pulse."
+                  : "This classroom session has ended. Your collected feedback and AI teaching analysis are preserved."}
+              </p>
+
+              <div className="mt-6 flex flex-wrap items-center gap-2">
+                <InfoChip
+                  icon={
+                    <Users className="h-3.5 w-3.5" />
+                  }
+                  label={`${participantCount} students`}
+                />
+
+                <InfoChip
+                  icon={
+                    <Radio className="h-3.5 w-3.5" />
+                  }
+                  label={`${totalSignals} signals`}
+                />
+
+                {isPulseActive && (
                   <InfoChip
                     icon={
-                      <TrendingUp className="h-3.5 w-3.5" />
+                      <Zap className="h-3.5 w-3.5" />
                     }
                     label={
-                      isRoundActive
-                        ? "Pulse open"
-                        : isEnded
-                          ? "Closed"
-                          : "Waiting"
+                      currentSession.roundTopic
                     }
                   />
-                </div>
-              </div>
-
-              <div className="shrink-0">
-                <div className="relative flex h-40 w-40 items-center justify-center sm:h-48 sm:w-48">
-                  <div className="absolute inset-0 rounded-full border border-violet-400/10 bg-violet-500/5" />
-
-                  <div className="absolute inset-6 rounded-full border border-violet-400/10" />
-
-                  <div className="relative flex h-24 w-24 items-center justify-center rounded-[2rem] bg-linear-to-br from-violet-500 via-violet-600 to-indigo-600 text-white shadow-2xl shadow-violet-500/30">
-                    <Radio className="h-10 w-10" />
-                  </div>
-
-                  <div className="absolute right-0 top-5 rounded-2xl border border-(--border) bg-(--surface)/90 px-3 py-2 shadow-(--shadow-md) backdrop-blur-xl">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={[
-                          "h-2 w-2 rounded-full",
-                          isEnded
-                            ? "bg-(--foreground-subtle)"
-                            : "animate-pulse bg-emerald-400",
-                        ].join(" ")}
-                      />
-
-                      <span className="text-[9px] font-black uppercase tracking-wider text-(--foreground-muted)">
-                        {isEnded
-                          ? "Completed"
-                          : "Monitoring"}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="absolute bottom-2 left-0 rounded-2xl border border-(--border) bg-(--surface)/90 px-3 py-2 shadow-(--shadow-md) backdrop-blur-xl">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="h-3.5 w-3.5 text-violet-300" />
-
-                      <span className="text-[9px] font-black uppercase tracking-wider text-(--foreground-muted)">
-                        Live insights
-                      </span>
-                    </div>
-                  </div>
-                </div>
+                )}
               </div>
             </div>
+
+            {isActive && (
+              <button
+                type="button"
+                onClick={
+                  handleEndSession
+                }
+                disabled={ending}
+                className="group inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-5 text-xs font-black text-rose-300 transition-all hover:-translate-y-0.5 hover:bg-rose-500/15 hover:shadow-lg hover:shadow-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <XCircle className="h-4 w-4" />
+
+                {ending
+                  ? "Ending..."
+                  : "End Session"}
+              </button>
+            )}
           </div>
         </section>
 
-        {/* =====================================================
-            ERROR BANNER
-        ===================================================== */}
-
+        {/* ERROR */}
         {error && (
-          <div className="mt-5 rounded-2xl border border-rose-400/15 bg-rose-400/[0.06] px-4 py-3 text-sm text-rose-300">
-            {error}
+          <div className="mt-5 flex items-start gap-3 rounded-2xl border border-rose-500/15 bg-rose-500/[0.06] px-4 py-3">
+            <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
+
+            <p className="text-xs leading-5 text-rose-300">
+              {error}
+            </p>
           </div>
         )}
 
         {/* =====================================================
-            CURRENT TOPIC
+            CONTROL CENTER
         ===================================================== */}
 
-        {!isEnded && (
-          <section className="mt-5 rounded-[2rem] border border-violet-500/15 bg-linear-to-r from-violet-500/10 via-(--surface) to-indigo-500/5 p-5 sm:p-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
-                <Sparkles className="h-5 w-5" />
-              </div>
+        {isActive && (
+          <section className="mt-6 grid gap-6 xl:grid-cols-[500px_minmax(0,1fr)]">
 
-              <div className="min-w-0 flex-1">
-                <p className="text-[9px] font-black uppercase tracking-[0.2em] text-violet-400">
-                  Current teaching pulse
-                </p>
+            {/* QR ACCESS */}
 
-                <h2 className="mt-1 text-lg font-black sm:text-xl">
-                  {roundTopic ||
-                    "Teaching pulse in progress"}
-                </h2>
+            <div className="min-w-0">
+              <SessionQRCode
+                joinCode={
+                  currentSession.joinCode
+                }
+                sessionId={
+                  currentSession.id
+                }
+                title={
+                  currentSession.title
+                }
+              />
 
-                <p className="mt-1 text-xs text-(--foreground-muted)">
-                  Round{" "}
-                  {currentRound}{" "}
-                  ·{" "}
-                  {roundStatus ===
-                  "active"
-                    ? "Students can respond now"
-                    : "Waiting for faculty to start the pulse"}
-                </p>
-              </div>
-
-              <div
-                className={[
-                  "inline-flex shrink-0 items-center gap-2 self-start rounded-full border px-3 py-1.5 text-[9px] font-black uppercase tracking-wider sm:self-auto",
-                  isRoundActive
-                    ? "border-emerald-400/15 bg-emerald-400/10 text-emerald-300"
-                    : "border-amber-400/15 bg-amber-400/10 text-amber-300",
-                ].join(" ")}
-              >
-                <span
-                  className={[
-                    "h-1.5 w-1.5 rounded-full",
-                    isRoundActive
-                      ? "animate-pulse bg-emerald-400"
-                      : "bg-amber-400",
-                  ].join(" ")}
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <MiniInfo
+                  label="Join code"
+                  value={
+                    currentSession.joinCode ||
+                    "—"
+                  }
                 />
 
-                {isRoundActive
-                  ? "Live"
-                  : "Waiting"}
+                <MiniInfo
+                  label="Students"
+                  value={String(
+                    participantCount
+                  )}
+                />
+              </div>
+            </div>
+
+            {/* ROUND CONTROL */}
+
+            <div className="relative min-w-0 overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6 sm:p-7">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-violet-500/10 blur-3xl"
+              />
+
+              <div className="relative z-10">
+
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
+                      Teaching pulse
+                    </p>
+
+                    <h2 className="mt-2 text-2xl font-black tracking-tight">
+                      {isPulseActive
+                        ? currentSession.roundTopic
+                        : currentSession.currentRound ===
+                            0
+                          ? "Start your first topic"
+                          : "Ready for the next topic"}
+                    </h2>
+
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-(--foreground-muted)">
+                      {isPulseActive
+                        ? "Students can respond to the current teaching topic right now."
+                        : "Each pulse is manually started by you. Nothing begins automatically."}
+                    </p>
+                  </div>
+
+                  {isPulseActive ? (
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+
+                      <div className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 px-4 py-2.5">
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-wider text-emerald-300">
+                            Live now
+                          </p>
+
+                          <p className="max-w-52 truncate text-sm font-black text-(--foreground)">
+                            {
+                              currentSession.roundTopic
+                            }
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={
+                          handleFinishPulse
+                        }
+                        disabled={
+                          endingPulse
+                        }
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 text-xs font-black text-amber-300 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Check className="h-4 w-4" />
+
+                        {endingPulse
+                          ? "Saving..."
+                          : "End Pulse"}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={
+                        startingPulse ||
+                        !topic.trim()
+                      }
+                      onClick={
+                        handleStartPulse
+                      }
+                      className="group inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-2xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 text-xs font-black text-white shadow-lg shadow-violet-500/20 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Radio className="h-4 w-4" />
+
+                      {startingPulse
+                        ? "Starting..."
+                        : currentSession.currentRound ===
+                            0
+                          ? "Start Pulse"
+                          : "Start Next Pulse"}
+
+                      <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                    </button>
+                  )}
+                </div>
+
+                {!isPulseActive && (
+                  <div className="mt-7">
+                    <label
+                      htmlFor="pulse-topic"
+                      className="mb-2 block text-[10px] font-black uppercase tracking-[0.18em] text-(--foreground-muted)"
+                    >
+                      Teaching topic
+                    </label>
+
+                    <div className="relative">
+                      <input
+                        id="pulse-topic"
+                        value={
+                          topic
+                        }
+                        onChange={(
+                          event
+                        ) => {
+                          setTopic(
+                            event.target.value
+                          )
+
+                          if (
+                            error
+                          ) {
+                            setError(
+                              null
+                            )
+                          }
+                        }}
+                        onKeyDown={(
+                          event
+                        ) => {
+                          if (
+                            event.key ===
+                              "Enter" &&
+                            !event.shiftKey
+                          ) {
+                            event.preventDefault()
+
+                            if (
+                              topic.trim()
+                            ) {
+                              void handleStartPulse()
+                            }
+                          }
+                        }}
+                        maxLength={120}
+                        placeholder="Example: Database normalization"
+                        className="h-13 w-full rounded-2xl border border-(--border) bg-(--background-soft) px-4 pr-20 text-sm font-semibold text-(--foreground) outline-none transition placeholder:text-(--foreground-subtle) focus:border-violet-400/40 focus:ring-2 focus:ring-violet-500/10"
+                      />
+
+                      <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 rounded-lg bg-(--surface) px-2 py-1 text-[9px] font-bold text-(--foreground-subtle)">
+                        {topic.length}
+                        /120
+                      </span>
+                    </div>
+
+                    <div className="mt-3 flex items-start gap-2">
+                      <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-300" />
+
+                      <p className="text-[10px] leading-5 text-(--foreground-subtle)">
+                        Enter the exact concept you are teaching.
+                        The pulse starts only when you press Start Pulse.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {isPulseActive && (
+                  <div className="mt-6 rounded-2xl border border-violet-400/10 bg-violet-500/5 p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
+                        <Lightbulb className="h-5 w-5" />
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
+                          Current teaching topic
+                        </p>
+
+                        <p className="mt-1 truncate text-sm font-black">
+                          {
+                            currentSession.roundTopic
+                          }
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                  <RoundStatusCard
+                    active={
+                      currentSession.roundStatus ===
+                      "waiting"
+                    }
+                    label="Waiting"
+                    value={
+                      currentSession.roundStatus ===
+                      "waiting"
+                        ? "Ready"
+                        : "Idle"
+                    }
+                  />
+
+                  <RoundStatusCard
+                    active={
+                      currentSession.roundStatus ===
+                      "active"
+                    }
+                    label="Active"
+                    value={
+                      currentSession.roundStatus ===
+                      "active"
+                        ? `Round ${currentSession.currentRound}`
+                        : "Idle"
+                    }
+                  />
+
+                  <RoundStatusCard
+                    active={
+                      currentSession.roundStatus ===
+                      "completed"
+                    }
+                    label="Completed"
+                    value={
+                      currentSession.roundStatus ===
+                      "completed"
+                        ? "Saved"
+                        : "Waiting"
+                    }
+                  />
+                </div>
               </div>
             </div>
           </section>
         )}
 
         {/* =====================================================
-            STAT CARDS
+            METRICS
         ===================================================== */}
 
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
+        <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
             icon={
               <Users className="h-5 w-5" />
             }
             label="Students"
-            value={String(
-              participantCount,
-            )}
-            description="Unique students in this pulse"
+            value={
+              participantCount
+            }
+            description="Unique students who responded"
             tone="blue"
           />
 
-          <StatCard
+          <MetricCard
             icon={
               <Radio className="h-5 w-5" />
             }
-            label="Responses"
-            value={String(
-              totalSignals,
-            )}
-            description="Signals in current round"
+            label="Total signals"
+            value={
+              totalSignals
+            }
+            description="Responses across this session"
             tone="violet"
           />
 
-          <StatCard
+          <MetricCard
             icon={
-              <TrendingUp className="h-5 w-5" />
+              <CheckCircle2 className="h-5 w-5" />
             }
-            label="Confusion"
-            value={`${confusionPercentage}%`}
-            description="Lost + confused signals"
-            tone="rose"
-          />
-
-          <StatCard
-            icon={
-              <Sparkles className="h-5 w-5" />
-            }
-            label="Current round"
+            label="Current pulse"
             value={
-              isEnded
-                ? "Done"
-                : String(
-                    currentRound,
-                  )
+              currentSession.currentRound
             }
             description={
-              isEnded
-                ? "Classroom completed"
-                : roundTopic ||
-                  "Live teaching pulse"
+              isPulseActive
+                ? "Live and collecting responses"
+                : "Waiting for faculty"
             }
             tone="emerald"
           />
-        </div>
+
+          <MetricCard
+            icon={
+              <Sparkles className="h-5 w-5" />
+            }
+            label="AI insight"
+            value={
+              aiSummaryText
+                ? "Ready"
+                : "Pending"
+            }
+            description={
+              aiSummaryText
+                ? "Teaching report available"
+                : "Generated after session"
+            }
+            tone="amber"
+          />
+        </section>
 
         {/* =====================================================
-            MAIN GRID
+            LIVE PULSE + AI
         ===================================================== */}
 
-        <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-          {/* ===================================================
-              LIVE DISTRIBUTION
-          =================================================== */}
+        <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_370px]">
 
-          <section className="surface overflow-hidden rounded-[2rem]">
-            <div className="border-b border-(--border) bg-linear-to-r from-violet-500/[0.04] to-transparent p-5 sm:p-7">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          {/* LIVE */}
+          <div className="surface overflow-hidden rounded-[2rem] p-6 sm:p-7">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
+                    <Radio className="h-4 w-4" />
+                  </span>
+
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
+                    Classroom pulse
+                  </p>
+                </div>
+
+                <h2 className="mt-3 text-2xl font-black tracking-tight">
+                  {isPulseActive
+                    ? currentSession.roundTopic
+                    : "Waiting for the next topic"}
+                </h2>
+
+                <p className="mt-1 text-sm leading-6 text-(--foreground-muted)">
+                  {isPulseActive
+                    ? "Live responses from the current teaching topic."
+                    : "The next topic will appear here when you manually start another pulse."}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-violet-400/10 bg-violet-500/5 px-4 py-3 text-center">
+                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
+                  Responses
+                </p>
+
+                <p className="mt-1 text-2xl font-black">
+                  {
+                    currentPulseTotal
+                  }
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-7 grid gap-3 sm:grid-cols-2">
+              <LiveSignalCard
+                signal="got_it"
+                count={
+                  roundCounts.got_it
+                }
+                total={
+                  currentPulseTotal
+                }
+              />
+
+              <LiveSignalCard
+                signal="slightly_lost"
+                count={
+                  roundCounts.slightly_lost
+                }
+                total={
+                  currentPulseTotal
+                }
+              />
+
+              <LiveSignalCard
+                signal="confused"
+                count={
+                  roundCounts.confused
+                }
+                total={
+                  currentPulseTotal
+                }
+              />
+
+              <LiveSignalCard
+                signal="interesting"
+                count={
+                  roundCounts.interesting
+                }
+                total={
+                  currentPulseTotal
+                }
+              />
+            </div>
+
+            <div className="relative mt-5 overflow-hidden rounded-2xl border border-(--border) bg-(--background-soft) p-5">
+              <div
+                aria-hidden="true"
+                className={[
+                  "pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full blur-2xl",
+                  confusionRate >=
+                    50
+                    ? "bg-rose-400/10"
+                    : confusionRate >=
+                        25
+                      ? "bg-amber-400/10"
+                      : "bg-emerald-400/10",
+                ].join(" ")}
+              />
+
+              <div className="relative z-10 flex items-center justify-between gap-4">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
-                      <Radio className="h-4 w-4" />
-                    </span>
+                  <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-muted)">
+                    Current confusion rate
+                  </p>
 
-                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
-                      Classroom pulse
-                    </p>
-                  </div>
-
-                  <h2 className="mt-3 text-2xl font-black tracking-tight sm:text-3xl">
-                    Live signal distribution
-                  </h2>
-
-                  <p className="mt-2 text-sm leading-6 text-(--foreground-muted)">
-                    Anonymous student responses update here automatically.
+                  <p className="mt-2 text-4xl font-black">
+                    {
+                      confusionRate
+                    }
+                    %
                   </p>
                 </div>
 
                 <div
                   className={[
-                    "inline-flex items-center gap-2 self-start rounded-full border px-3 py-2 text-[9px] font-black uppercase tracking-wider",
-                    roomConfig.bg,
-                    roomConfig.border,
-                    roomConfig.text,
+                    "rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-wider",
+                    confusionRate >=
+                      50
+                      ? "bg-rose-500/10 text-rose-300"
+                      : confusionRate >=
+                          25
+                        ? "bg-amber-500/10 text-amber-300"
+                        : "bg-emerald-500/10 text-emerald-300",
                   ].join(" ")}
                 >
-                  <span
-                    className={[
-                      "h-2 w-2 rounded-full",
-                      roomConfig.dot,
-                      roomState ===
-                        "green"
-                        ? "animate-pulse"
-                        : "",
-                    ].join(" ")}
-                  />
-
-                  {roomConfig.label}
+                  {confusionRate >=
+                    50
+                    ? "High attention"
+                    : confusionRate >=
+                        25
+                      ? "Watch closely"
+                      : "Looking good"}
                 </div>
               </div>
+
+              <p className="relative z-10 mt-3 max-w-xl text-xs leading-5 text-(--foreground-muted)">
+                Combines Slightly lost and Confused responses from
+                the current teaching topic.
+              </p>
             </div>
 
-            <div className="p-5 sm:p-7">
-              <div className="grid gap-3">
-                {(
-                  Object.keys(
-                    SIGNAL_CONFIG,
-                  ) as SignalType[]
-                ).map(
-                  (signal) => {
-                    const config =
-                      SIGNAL_CONFIG[
-                        signal
-                      ]
+            {!isPulseActive &&
+              isActive && (
+                <div className="mt-5 rounded-[2rem] border border-dashed border-(--border-strong) bg-(--background-soft) px-6 py-12 text-center">
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl border border-violet-400/10 bg-violet-500/10 text-violet-300">
+                    <Sparkles className="h-6 w-6" />
+                  </div>
 
-                    const count =
-                      signalCounts[
-                        signal
-                      ]
-
-                    const percentage =
-                      totalSignals >
-                      0
-                        ? Math.round(
-                            (count /
-                              totalSignals) *
-                              100,
-                          )
-                        : 0
-
-                    return (
-                      <SignalRow
-                        key={
-                          signal
-                        }
-                        label={
-                          config.label
-                        }
-                        description={
-                          config.description
-                        }
-                        count={
-                          count
-                        }
-                        percentage={
-                          percentage
-                        }
-                        color={
-                          config.color
-                        }
-                        bg={
-                          config.bg
-                        }
-                      />
-                    )
-                  },
-                )}
-              </div>
-
-              {totalSignals ===
-                0 && (
-                <div className="mt-5 rounded-2xl border border-(--border) bg-(--background-soft) px-5 py-8 text-center">
-                  <Radio className="mx-auto h-7 w-7 text-(--foreground-subtle)" />
-
-                  <p className="mt-3 text-sm font-black">
-                    Waiting for student responses
+                  <p className="mt-5 text-[10px] font-black uppercase tracking-[0.18em] text-violet-400">
+                    Next teaching segment
                   </p>
 
-                  <p className="mt-1 text-xs text-(--foreground-muted)">
-                    Signals will appear here as students respond.
+                  <h3 className="mt-2 text-lg font-black">
+                    Ready for the next topic
+                  </h3>
+
+                  <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-(--foreground-muted)">
+                    Enter the next concept above and manually start
+                    a new PulseBoard pulse.
                   </p>
                 </div>
               )}
-            </div>
-          </section>
+          </div>
 
-          {/* ===================================================
-              FACULTY CONTROL
-          =================================================== */}
+          {/* AI */}
+          <aside className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-(--surface) to-indigo-500/5 p-6">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -right-16 -top-16 h-44 w-44 rounded-full bg-violet-500/10 blur-3xl"
+            />
 
-          <aside className="space-y-5">
-            <section className="surface rounded-[2rem] p-5">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
-                  <Radio className="h-5 w-5" />
-                </div>
-
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-400">
-                    Faculty control
-                  </p>
-
-                  <h2 className="mt-1 text-base font-black">
-                    Classroom room
-                  </h2>
-                </div>
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-violet-400/10 bg-violet-500/[0.04] p-4">
-                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
-                  Join code
-                </p>
-
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="text-3xl font-black tracking-[0.16em]">
-                    {joinCode}
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={
-                      handleCopy
-                    }
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-(--border) bg-(--surface) text-(--foreground-muted) transition hover:border-violet-400/30 hover:text-violet-300"
-                    aria-label="Copy join code"
-                  >
-                    {copied ? (
-                      <Check className="h-4 w-4 text-emerald-400" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-
-                <p className="mt-2 text-[10px] text-(--foreground-muted)">
-                  Share this code with students.
-                </p>
-              </div>
-
-              <div className="mt-3 rounded-2xl border border-(--border) bg-(--background-soft) p-4">
-                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
-                  Current topic
-                </p>
-
-                <p className="mt-2 text-sm font-black">
-                  {roundTopic ||
-                    "No topic specified"}
-                </p>
-
-                <p className="mt-1 text-[10px] text-(--foreground-muted)">
-                  Round{" "}
-                  {currentRound}
-                </p>
-              </div>
-
-              <div className="mt-4 flex items-center gap-2 text-[10px] text-(--foreground-subtle)">
-                <span
-                  className={[
-                    "h-2 w-2 rounded-full",
-                    roomConfig.dot,
-                  ].join(" ")}
-                />
-
-                {roomConfig.label}
-              </div>
-            </section>
-
-            {/* =================================================
-                PRIVACY
-            ================================================= */}
-
-            <section className="relative overflow-hidden rounded-[2rem] border border-emerald-400/10 bg-emerald-400/[0.035] p-5">
-              <div className="relative z-10">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-400/10 text-emerald-300">
-                  <Users className="h-5 w-5" />
-                </div>
-
-                <p className="mt-4 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-400">
-                  Privacy first
-                </p>
-
-                <h3 className="mt-2 text-base font-black">
-                  Faculty sees classroom totals.
-                </h3>
-
-                <p className="mt-2 text-xs leading-5 text-(--foreground-muted)">
-                  Individual student identities are not displayed in the live signal dashboard.
-                </p>
-              </div>
-            </section>
-
-            {/* =================================================
-                END SESSION
-            ================================================= */}
-
-            {!isEnded && (
-              <section className="rounded-[2rem] border border-rose-400/10 bg-rose-400/[0.035] p-5">
-                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-rose-300">
-                  Session control
-                </p>
-
-                <h3 className="mt-2 text-base font-black">
-                  Finish this classroom?
-                </h3>
-
-                <p className="mt-2 text-xs leading-5 text-(--foreground-muted)">
-                  Ending the session closes new student responses and prepares the classroom data for the insight report.
-                </p>
-
-                <button
-                  type="button"
-                  onClick={
-                    handleEndSession
-                  }
-                  disabled={
-                    ending
-                  }
-                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-xs font-black text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <StopCircle className="h-4 w-4" />
-
-                  {ending
-                    ? "Ending session..."
-                    : "End session"}
-                </button>
-              </section>
-            )}
-          </aside>
-        </div>
-
-        {/* =====================================================
-            ROUND TREND
-        ===================================================== */}
-
-        {trendData.length >
-          1 && (
-          <section className="surface mt-6 rounded-[2rem] p-5 sm:p-7">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-300">
-                <TrendingUp className="h-5 w-5" />
-              </div>
-
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-300">
-                  Teaching trend
-                </p>
-
-                <h2 className="mt-1 text-xl font-black">
-                  Confusion across rounds
-                </h2>
-              </div>
-            </div>
-
-            <div className="mt-6 h-64 w-full">
-              <ResponsiveContainer
-                width="100%"
-                height="100%"
-              >
-                <LineChart
-                  data={
-                    trendData
-                  }
-                  margin={{
-                    top: 10,
-                    right: 10,
-                    left: -20,
-                    bottom: 5,
-                  }}
-                >
-                  <XAxis
-                    dataKey="round"
-                    tick={{
-                      fill: "currentColor",
-                      fontSize: 11,
-                      opacity: 0.5,
-                    }}
-                    tickLine={
-                      false
-                    }
-                    axisLine={
-                      false
-                    }
-                    tickFormatter={(
-                      value,
-                    ) =>
-                      `R${value}`
-                    }
-                  />
-
-                  <YAxis
-                    domain={[
-                      0,
-                      100,
-                    ]}
-                    tick={{
-                      fill: "currentColor",
-                      fontSize: 11,
-                      opacity: 0.5,
-                    }}
-                    tickLine={
-                      false
-                    }
-                    axisLine={
-                      false
-                    }
-                    tickFormatter={(
-                      value,
-                    ) =>
-                      `${value}%`
-                    }
-                  />
-
-                  <Tooltip
-                    contentStyle={{
-                      background:
-                        "var(--surface)",
-                      border:
-                        "1px solid var(--border)",
-                      borderRadius:
-                        "14px",
-                      color:
-                        "var(--foreground)",
-                      fontSize:
-                        "12px",
-                    }}
-                    formatter={(
-                      value,
-                    ) => [
-                      `${value}%`,
-                      "Confusion",
-                    ]}
-                    labelFormatter={(
-                      value,
-                    ) =>
-                      `Round ${value}`
-                    }
-                  />
-
-                  <Line
-                    type="monotone"
-                    dataKey="confusion"
-                    stroke="#ef4444"
-                    strokeWidth={3}
-                    dot={{
-                      r: 4,
-                      fill: "#ef4444",
-                    }}
-                    activeDot={{
-                      r: 6,
-                      fill: "#ef4444",
-                    }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
-        )}
-
-        {/* =====================================================
-            AI SUMMARY
-        ===================================================== */}
-
-        {isEnded && (
-          <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-violet-400/15 bg-linear-to-br from-violet-500/[0.08] via-(--surface) to-indigo-500/[0.05] p-5 sm:p-7">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
+            <div className="relative z-10">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
                 <Sparkles className="h-5 w-5" />
               </div>
 
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-400">
-                  AI classroom report
-                </p>
+              <p className="mt-5 text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
+                AI classroom insight
+              </p>
 
-                <h2 className="mt-1 text-xl font-black">
-                  Teaching insights
-                </h2>
-              </div>
-            </div>
+              <h2 className="mt-2 text-2xl font-black tracking-tight">
+                Session intelligence
+              </h2>
 
-            <div className="mt-5 rounded-2xl border border-(--border) bg-(--background-soft) p-5">
-              {summaryLoading ? (
-                <div className="flex items-center gap-3 text-sm text-(--foreground-muted)">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-violet-400/20 border-t-violet-400" />
+              <p className="mt-2 text-sm leading-6 text-(--foreground-muted)">
+                Your teaching report turns real classroom feedback
+                into practical next steps.
+              </p>
 
-                  Generating classroom insights...
-                </div>
-              ) : session.aiSummary ? (
-                <div className="space-y-4">
-                  {session.aiSummary
-                    .split(
-                      "\n\n",
-                    )
-                    .filter(
-                      (
-                        paragraph,
-                      ) =>
-                        paragraph.trim()
-                          .length >
-                        0,
-                    )
-                    .map(
-                      (
-                        paragraph,
-                        index,
-                      ) => (
-                        <p
-                          key={
-                            index
-                          }
-                          className="text-sm leading-7 text-(--foreground-secondary)"
-                        >
-                          {paragraph.trim()}
-                        </p>
-                      ),
-                    )}
+              {aiSummaryText ? (
+                <div className="mt-6 max-h-[420px] overflow-auto rounded-2xl border border-(--border) bg-(--background-soft) p-4">
+                  <p className="whitespace-pre-wrap text-sm leading-7 text-(--foreground-secondary)">
+                    {
+                      aiSummaryText
+                    }
+                  </p>
                 </div>
               ) : (
-                <div className="text-sm leading-6 text-(--foreground-muted)">
-                  Classroom session ended successfully. The AI insight report is not available yet.
+                <div className="mt-6 rounded-2xl border border-dashed border-(--border-strong) bg-(--background-soft) p-5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
+                    <Sparkles className="h-5 w-5" />
+                  </div>
+
+                  <p className="mt-4 text-sm font-black">
+                    AI report is waiting
+                  </p>
+
+                  <p className="mt-2 text-sm leading-6 text-(--foreground-muted)">
+                    End the classroom session after your teaching
+                    pulses are complete. PulseBoard will then generate
+                    a teaching-focused report.
+                  </p>
                 </div>
               )}
+
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <MiniInfo
+                  label="Topics recorded"
+                  value={String(
+                    roundSnapshots.length
+                  )}
+                />
+
+                <MiniInfo
+                  label="Signals"
+                  value={String(
+                    totalSignals
+                  )}
+                />
+              </div>
             </div>
-          </section>
-        )}
+          </aside>
+        </section>
 
-        {/* =====================================================
-            FOOTER
-        ===================================================== */}
+        {/* SESSION DETAILS */}
+        <section className="surface mt-6 overflow-hidden rounded-[2rem] p-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
+              <Radio className="h-5 w-5" />
+            </div>
 
-        <footer className="mt-8 pb-6 text-center">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-(--foreground-subtle)">
-            PulseBoard · Faculty Command Center
-          </p>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
+                Session details
+              </p>
 
-          <p className="mt-2 text-[10px] text-(--foreground-subtle)">
-            Live classroom signals · Anonymous student feedback · Real-time insights
-          </p>
-        </footer>
+              <h2 className="mt-1 text-xl font-black">
+                Classroom information
+              </h2>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <DetailBox
+              label="Course"
+              value={
+                currentSession.courseCode
+              }
+            />
+
+            <DetailBox
+              label="Join code"
+              value={
+                currentSession.joinCode
+              }
+            />
+
+            <DetailBox
+              label="Current topic"
+              value={
+                currentSession.roundTopic ||
+                "Waiting"
+              }
+            />
+
+            <DetailBox
+              label="Current round"
+              value={String(
+                currentSession.currentRound
+              )}
+            />
+          </div>
+        </section>
       </div>
     </main>
   )
 }
 
-/* =========================================================
-   INFO CHIP
-========================================================= */
+/*
+ * =========================================================
+ * HELPERS
+ * =========================================================
+ *
+ * We intentionally return null here until we wire a dedicated
+ * round query helper. persistRoundSnapshot already has the
+ * correct fallback to session-level students.
+ */
+
+function getUniqueStudentCountFromRound(
+  _round: number,
+  _session: SessionView
+): number | null {
+  return null
+}
 
 function InfoChip({
   icon,
@@ -2234,21 +2294,79 @@ function InfoChip({
   label: string
 }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-(--border) bg-(--background-soft)/75 px-3 py-1.5 text-[10px] font-bold text-(--foreground-secondary)">
+    <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-(--border) bg-(--background-soft)/70 px-3 py-1.5 text-[10px] font-bold text-(--foreground-secondary)">
       <span className="text-violet-300">
         {icon}
       </span>
 
-      {label}
+      <span className="truncate">
+        {label}
+      </span>
     </span>
   )
 }
 
-/* =========================================================
-   STAT CARD
-========================================================= */
+function MiniInfo({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div className="rounded-2xl border border-(--border) bg-(--background-soft) px-3.5 py-3">
+      <p className="text-[8px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
+        {label}
+      </p>
 
-function StatCard({
+      <p className="mt-1 truncate text-xs font-black text-(--foreground-secondary)">
+        {value || "—"}
+      </p>
+    </div>
+  )
+}
+
+function RoundStatusCard({
+  active,
+  label,
+  value,
+}: {
+  active: boolean
+  label: string
+  value: string
+}) {
+  return (
+    <div
+      className={[
+        "rounded-2xl border px-4 py-3 transition-all",
+        active
+          ? "border-violet-400/15 bg-violet-500/10"
+          : "border-(--border) bg-(--background-soft)",
+      ].join(" ")}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[9px] font-black uppercase tracking-wider text-(--foreground-subtle)">
+          {label}
+        </p>
+
+        <span
+          className={[
+            "h-1.5 w-1.5 rounded-full",
+            active
+              ? "bg-violet-400"
+              : "bg-(--foreground-subtle)",
+          ].join(" ")}
+        />
+      </div>
+
+      <p className="mt-1 text-xs font-black">
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function MetricCard({
   icon,
   label,
   value,
@@ -2257,132 +2375,182 @@ function StatCard({
 }: {
   icon: ReactNode
   label: string
-  value: string
+  value: string | number
   description: string
   tone:
     | "blue"
     | "violet"
-    | "rose"
     | "emerald"
+    | "amber"
 }) {
-  const tones = {
+  const toneClasses = {
     blue: {
-      icon: "bg-blue-500/10 text-blue-300",
+      icon:
+        "bg-blue-500/10 text-blue-300",
+      glow:
+        "bg-blue-500/10",
     },
 
     violet: {
-      icon: "bg-violet-500/10 text-violet-300",
-    },
-
-    rose: {
-      icon: "bg-rose-500/10 text-rose-300",
+      icon:
+        "bg-violet-500/10 text-violet-300",
+      glow:
+        "bg-violet-500/10",
     },
 
     emerald: {
-      icon: "bg-emerald-500/10 text-emerald-300",
+      icon:
+        "bg-emerald-500/10 text-emerald-300",
+      glow:
+        "bg-emerald-500/10",
+    },
+
+    amber: {
+      icon:
+        "bg-amber-500/10 text-amber-300",
+      glow:
+        "bg-amber-500/10",
     },
   }
 
+  const current =
+    toneClasses[tone]
+
   return (
-    <div className="surface surface-hover rounded-3xl p-5">
-      <div className="flex items-start justify-between gap-4">
+    <div className="group surface relative overflow-hidden rounded-[2rem] p-5 transition-all duration-200 hover:-translate-y-1 hover:border-(--border-strong) hover:shadow-(--shadow-md)">
+      <div
+        aria-hidden="true"
+        className={[
+          "pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full blur-3xl opacity-0 transition-opacity duration-300 group-hover:opacity-100",
+          current.glow,
+        ].join(" ")}
+      />
+
+      <div className="relative z-10 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-muted)">
+            {label}
+          </p>
+
+          <p className="mt-3 text-3xl font-black tracking-tight">
+            {value}
+          </p>
+
+          <p className="mt-1.5 text-[10px] leading-5 text-(--foreground-subtle)">
+            {description}
+          </p>
+        </div>
+
         <div
           className={[
-            "flex h-10 w-10 items-center justify-center rounded-2xl",
-            tones[tone].icon,
+            "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl",
+            current.icon,
+            "transition-transform duration-200 group-hover:scale-110",
           ].join(" ")}
         >
           {icon}
         </div>
       </div>
-
-      <p className="mt-5 text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
-        {label}
-      </p>
-
-      <p className="mt-1 text-3xl font-black tracking-tight">
-        {value}
-      </p>
-
-      <p className="mt-2 line-clamp-2 text-[10px] leading-5 text-(--foreground-muted)">
-        {description}
-      </p>
     </div>
   )
 }
 
-/* =========================================================
-   SIGNAL ROW
-========================================================= */
-
-function SignalRow({
-  label,
-  description,
+function LiveSignalCard({
+  signal,
   count,
-  percentage,
-  color,
-  bg,
+  total,
 }: {
-  label: string
-  description: string
+  signal: SignalType
   count: number
-  percentage: number
-  color: string
-  bg: string
+  total: number
 }) {
+  const meta =
+    SIGNAL_META[signal]
+
+  const percentage =
+    total > 0
+      ? Math.round(
+          (count / total) *
+            100
+        )
+      : 0
+
   return (
-    <div className="rounded-2xl border border-(--border) bg-(--background-soft)/50 p-4">
-      <div className="flex items-start gap-3">
-        <div
-          className={[
-            "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
-            bg,
-          ].join(" ")}
-          style={{
-            color,
-          }}
-        >
-          <span className="h-2.5 w-2.5 rounded-full bg-current" />
+    <div
+      className={[
+        "group relative overflow-hidden rounded-3xl border p-4 transition-all duration-200 hover:-translate-y-0.5",
+        meta.tone,
+      ].join(" ")}
+    >
+      <div
+        aria-hidden="true"
+        className={[
+          "pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-3xl opacity-0 transition-opacity duration-300 group-hover:opacity-100",
+          meta.glow,
+        ].join(" ")}
+      />
+
+      <div className="relative z-10">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div
+              className={[
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl",
+                meta.iconTone,
+              ].join(" ")}
+            >
+              {meta.icon}
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black">
+                {meta.label}
+              </p>
+
+              <p className="mt-1 text-[10px] text-(--foreground-muted)">
+                {percentage}% of pulse
+              </p>
+            </div>
+          </div>
+
+          <p className="text-3xl font-black">
+            {count}
+          </p>
         </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-black">
-                {label}
-              </p>
-
-              <p className="mt-0.5 text-[10px] text-(--foreground-muted)">
-                {description}
-              </p>
-            </div>
-
-            <div className="shrink-0 text-right">
-              <p className="text-lg font-black tabular-nums">
-                {count}
-              </p>
-
-              {percentage >
-                0 && (
-                <p className="text-[9px] font-bold text-(--foreground-subtle)">
-                  {percentage}%
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-(--background)">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{
-                width: `${percentage}%`,
-                backgroundColor:
-                  color,
-              }}
-            />
-          </div>
+        <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-(--surface-hover)">
+          <div
+            className={[
+              "h-full rounded-full bg-linear-to-r transition-[width] duration-500",
+              meta.bar,
+            ].join(" ")}
+            style={{
+              width:
+                `${percentage}%`,
+            }}
+          />
         </div>
       </div>
+    </div>
+  )
+}
+
+function DetailBox({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div className="rounded-2xl border border-(--border) bg-(--background-soft) p-4 transition hover:border-(--border-strong)">
+      <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
+        {label}
+      </p>
+
+      <p className="mt-2 truncate text-sm font-bold text-(--foreground-secondary)">
+        {value || "—"}
+      </p>
     </div>
   )
 }
