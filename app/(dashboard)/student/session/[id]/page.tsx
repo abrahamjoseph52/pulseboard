@@ -1,3 +1,4 @@
+
 "use client"
 
 import {
@@ -760,9 +761,6 @@ export default function StudentSessionPage() {
                   onBack={
                     handleLeaveSession
                   }
-                  onAsk={() =>
-                    router.push(`/student/questions/${sessionId}`)
-                  }
                   message={
                     session.status !==
                     "active"
@@ -1009,7 +1007,6 @@ function SessionChip({
 function PulseComplete({
   selectedSignal,
   onBack,
-  onAsk,
   message,
 }: {
   selectedSignal:
@@ -1017,8 +1014,6 @@ function PulseComplete({
     | null
 
   onBack: () => void
-
-  onAsk: () => void
 
   message: string
 }) {
@@ -1069,15 +1064,6 @@ function PulseComplete({
         <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
         Return to dashboard
       </button>
-
-      <button
-        type="button"
-        onClick={onAsk}
-        className="mt-3 rounded-xl border border-violet-400/20 bg-violet-400/10 px-4 py-3 text-sm font-bold text-violet-300"
-      >
-        Ask anonymously
-      </button>
-
     </div>
   )
 }

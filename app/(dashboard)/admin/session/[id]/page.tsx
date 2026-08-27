@@ -62,10 +62,7 @@ import Button from "@/app/components/ui/Button"
 import Loading from "@/app/components/ui/Loading"
 import ThemeToggle from "@/app/components/ThemeToggle"
 import SessionQRCode from "@/app/components/admin/SessionQRCode"
-import AnonymousQuestions from "@/app/components/admin/AnonymousQuestions"
-import ClassroomIntelligence from "@/app/components/admin/ClassroomIntelligence"
-import TopicLearningGaps from "@/app/components/admin/TopicLearningGaps"
-import SessionTimeline from "@/app/components/admin/SessionTimeline"
+
 
 type TopicStatus =
   | "waiting"
@@ -2438,15 +2435,7 @@ export default function AdminSessionPage() {
           </div>
         </section>
 
-        <div className="mt-6 grid gap-6">
-          <AnonymousQuestions sessionId={sessionId} />
-
-          <ClassroomIntelligence sessionId={sessionId} />
-
-          <TopicLearningGaps sessionId={sessionId} />
-
-          <SessionTimeline sessionId={sessionId} />
-        </div>
+       
       </div>
     </main>
   )
