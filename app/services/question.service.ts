@@ -6,12 +6,22 @@ import {
   onSnapshot,
   query,
   serverTimestamp,
+  updateDoc,
   where,
+  doc,
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
 
-export type QuestionStatus = "visible" | "answered";
+/*
+|--------------------------------------------------------------------------
+| Question types
+|--------------------------------------------------------------------------
+*/
+
+export type QuestionStatus =
+  | "visible"
+  | "answered";
 
 export interface AnonymousQuestion {
   id: string;
@@ -28,7 +38,10 @@ export interface AnonymousQuestion {
 |--------------------------------------------------------------------------
 |
 | This is intentionally conservative.
-| It is NOT intended to replace proper server-side moderation.
+| It is client-side validation only.
+|
+| Firestore Security Rules should still be used
+| to protect the database.
 |
 */
 
@@ -45,11 +58,13 @@ const BLOCKED_PATTERNS: RegExp[] = [
 
 /*
 |--------------------------------------------------------------------------
-| Text normalization
+| Normalize text
 |--------------------------------------------------------------------------
 */
 
-function normalizeText(text: string): string {
+function normalizeText(
+  text: string
+): string {
   return text
     .normalize("NFKC")
     .replace(/\s+/g, " ")
@@ -65,10 +80,12 @@ function normalizeText(text: string): string {
 export function containsNuisanceContent(
   text: string
 ): boolean {
-  const normalized = normalizeText(text);
+  const normalized =
+    normalizeText(text);
 
-  return BLOCKED_PATTERNS.some((pattern) =>
-    pattern.test(normalized)
+  return BLOCKED_PATTERNS.some(
+    (pattern) =>
+      pattern.test(normalized)
   );
 }
 
@@ -78,16 +95,20 @@ export function containsNuisanceContent(
 |--------------------------------------------------------------------------
 */
 
-export function validateQuestion(text: string): {
+export function validateQuestion(
+  text: string
+): {
   valid: boolean;
   reason?: string;
 } {
-  const question = normalizeText(text);
+  const question =
+    normalizeText(text);
 
   if (!question) {
     return {
       valid: false,
-      reason: "Please enter a question.",
+      reason:
+        "Please enter a question.",
     };
   }
 
@@ -107,7 +128,9 @@ export function validateQuestion(text: string): {
     };
   }
 
-  if (containsNuisanceContent(question)) {
+  if (
+    containsNuisanceContent(question)
+  ) {
     return {
       valid: false,
       reason:
@@ -127,13 +150,13 @@ export function validateQuestion(text: string): {
 |
 | IMPORTANT:
 |
-| We deliberately DO NOT save:
+| We intentionally DO NOT store:
 |
-| uid
-| studentId
-| email
-| name
-| registerNumber
+| - uid
+| - studentId
+| - email
+| - name
+| - registerNumber
 |
 */
 
@@ -142,33 +165,56 @@ export async function submitAnonymousQuestion(
   question: string,
   topic = "General"
 ): Promise<string> {
-  const validation = validateQuestion(question);
+  const cleanSessionId =
+    sessionId.trim();
 
-  if (!validation.valid) {
+  if (!cleanSessionId) {
     throw new Error(
-      validation.reason || "Invalid question."
+      "Session ID is missing."
     );
   }
 
-  if (!sessionId?.trim()) {
-    throw new Error("Session ID is missing.");
+  const validation =
+    validateQuestion(question);
+
+  if (!validation.valid) {
+    throw new Error(
+      validation.reason ||
+        "Invalid question."
+    );
   }
 
-  const cleanQuestion = normalizeText(question);
+  const cleanQuestion =
+    normalizeText(question);
 
   const cleanTopic =
-    normalizeText(topic || "General") || "General";
+    normalizeText(
+      topic || "General"
+    ) || "General";
 
-  const questionRef = await addDoc(
-    collection(db, "questions"),
-    {
-      sessionId: sessionId.trim(),
-      question: cleanQuestion,
-      topic: cleanTopic,
-      status: "visible",
-      createdAt: serverTimestamp(),
-    }
-  );
+  const questionRef =
+    await addDoc(
+      collection(
+        db,
+        "questions"
+      ),
+      {
+        sessionId:
+          cleanSessionId,
+
+        question:
+          cleanQuestion,
+
+        topic:
+          cleanTopic,
+
+        status:
+          "visible",
+
+        createdAt:
+          serverTimestamp(),
+      }
+    );
 
   return questionRef.id;
 }
@@ -177,81 +223,115 @@ export async function submitAnonymousQuestion(
 |--------------------------------------------------------------------------
 | Subscribe to session questions
 |--------------------------------------------------------------------------
-|
-| We only use:
-|
-| where(sessionId == ...)
-|
-| and sort in JavaScript.
-|
-| This avoids requiring a composite Firestore index.
-|
 */
 
 export function subscribeToQuestions(
   sessionId: string,
-  callback: (questions: AnonymousQuestion[]) => void,
-  onError?: (error: Error) => void
+  callback: (
+    questions: AnonymousQuestion[]
+  ) => void,
+  onError?: (
+    error: Error
+  ) => void
 ): () => void {
   if (!sessionId) {
     callback([]);
+
     return () => {};
   }
 
-  const questionsQuery = query(
-    collection(db, "questions"),
-    where("sessionId", "==", sessionId)
-  );
+  const questionsQuery =
+    query(
+      collection(
+        db,
+        "questions"
+      ),
+      where(
+        "sessionId",
+        "==",
+        sessionId
+      )
+    );
 
   return onSnapshot(
     questionsQuery,
     (snapshot) => {
       const questions: AnonymousQuestion[] =
-        snapshot.docs.map((document) => {
-          const data = document.data();
+        snapshot.docs.map(
+          (document) => {
+            const data =
+              document.data();
 
-          let createdAt: Date | null = null;
+            let createdAt:
+              Date | null = null;
 
-          if (
-            data.createdAt &&
-            typeof data.createdAt.toDate === "function"
-          ) {
-            createdAt = data.createdAt.toDate();
+            if (
+              data.createdAt &&
+              typeof data
+                .createdAt
+                .toDate ===
+                "function"
+            ) {
+              createdAt =
+                data.createdAt.toDate();
+            }
+
+            return {
+              id:
+                document.id,
+
+              sessionId:
+                typeof data.sessionId ===
+                "string"
+                  ? data.sessionId
+                  : sessionId,
+
+              question:
+                typeof data.question ===
+                "string"
+                  ? data.question
+                  : "",
+
+              topic:
+                typeof data.topic ===
+                "string"
+                  ? data.topic
+                  : "General",
+
+              status:
+                data.status ===
+                "answered"
+                  ? "answered"
+                  : "visible",
+
+              createdAt,
+            };
           }
+        );
 
-          return {
-            id: document.id,
-            sessionId:
-              typeof data.sessionId === "string"
-                ? data.sessionId
-                : sessionId,
-            question:
-              typeof data.question === "string"
-                ? data.question
-                : "",
-            topic:
-              typeof data.topic === "string"
-                ? data.topic
-                : "General",
-            status:
-              data.status === "answered"
-                ? "answered"
-                : "visible",
-            createdAt,
-          };
-        });
+      /*
+       * Newest questions first.
+       */
 
-      questions.sort((a, b) => {
-        const aTime =
-          a.createdAt?.getTime() ?? 0;
+      questions.sort(
+        (a, b) => {
+          const aTime =
+            a.createdAt
+              ?.getTime() ?? 0;
 
-        const bTime =
-          b.createdAt?.getTime() ?? 0;
+          const bTime =
+            b.createdAt
+              ?.getTime() ?? 0;
 
-        return bTime - aTime;
-      });
+          return (
+            bTime - aTime
+          );
+        }
+      );
 
-      callback(questions);
+      callback(
+        questions
+      );
     },
     (error) => {
       console.error(
@@ -260,6 +340,40 @@ export function subscribeToQuestions(
       );
 
       onError?.(error);
+    }
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| Mark question as answered
+|--------------------------------------------------------------------------
+|
+| Faculty-side action.
+|
+*/
+
+export async function markQuestionAnswered(
+  questionId: string
+): Promise<void> {
+  const cleanId =
+    questionId.trim();
+
+  if (!cleanId) {
+    throw new Error(
+      "Question ID is missing."
+    );
+  }
+
+  await updateDoc(
+    doc(
+      db,
+      "questions",
+      cleanId
+    ),
+    {
+      status:
+        "answered",
     }
   );
 }
@@ -276,19 +390,36 @@ export function getQuestionTopicCounts(
   topic: string;
   count: number;
 }> {
-  const counts: Record<string, number> = {};
+  const counts:
+    Record<string, number> =
+    {};
 
-  for (const question of questions) {
+  for (
+    const question of questions
+  ) {
     const topic =
-      question.topic?.trim() || "General";
+      question.topic?.trim() ||
+      "General";
 
-    counts[topic] = (counts[topic] || 0) + 1;
+    counts[topic] =
+      (counts[topic] || 0) +
+      1;
   }
 
-  return Object.entries(counts)
-    .map(([topic, count]) => ({
-      topic,
-      count,
-    }))
-    .sort((a, b) => b.count - a.count);
+  return Object.entries(
+    counts
+  )
+    .map(
+      ([
+        topic,
+        count,
+      ]) => ({
+        topic,
+        count,
+      })
+    )
+    .sort(
+      (a, b) =>
+        b.count - a.count
+    );
 }

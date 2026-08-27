@@ -25,6 +25,7 @@ import SessionStatus from "@/app/components/student/SessionStatus"
 import Card from "@/app/components/ui/Card"
 import Loading from "@/app/components/ui/Loading"
 import ThemeToggle from "@/app/components/ThemeToggle"
+import AnonymousQuestionBox from "@/app/components/student/AnonymousQuestionBox";
 
 import { auth } from "@/lib/firebase"
 
@@ -637,7 +638,22 @@ export default function StudentSessionPage() {
               </div>
             </section>
           )}
+        {/* =====================================================
+            ANONYMOUS QUESTION BOX
+        ===================================================== */}
 
+        {effectiveSessionActive &&
+          session.roundStatus === "active" &&
+          roundTopic &&
+          typeof sessionId === "string" && (
+            <div className="mt-6">
+              <AnonymousQuestionBox
+                sessionId={sessionId}
+                topic={roundTopic}
+                topicNumber={currentRound}
+              />
+            </div>
+          )}
         {/* =====================================================
             MAIN CONTENT
         ===================================================== */}
