@@ -3,12 +3,12 @@
 import {
   addDoc,
   collection,
+  doc,
   onSnapshot,
   query,
   serverTimestamp,
   updateDoc,
   where,
-  doc,
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
@@ -29,6 +29,20 @@ export interface AnonymousQuestion {
   question: string;
   topic: string;
   status: QuestionStatus;
+
+  /*
+   * Faculty answer.
+   *
+   * This is optional because unanswered
+   * questions do not have an answer yet.
+   */
+  answer?: string;
+
+  /*
+   * When faculty answered the question.
+   */
+  answeredAt?: Date | null;
+
   createdAt: Date | null;
 }
 
@@ -36,13 +50,6 @@ export interface AnonymousQuestion {
 |--------------------------------------------------------------------------
 | Nuisance detection
 |--------------------------------------------------------------------------
-|
-| This is intentionally conservative.
-| It is client-side validation only.
-|
-| Firestore Security Rules should still be used
-| to protect the database.
-|
 */
 
 const BLOCKED_PATTERNS: RegExp[] = [
@@ -135,6 +142,50 @@ export function validateQuestion(
       valid: false,
       reason:
         "This message was rejected because it doesn't appear to be an academic question.",
+    };
+  }
+
+  return {
+    valid: true,
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| Answer validation
+|--------------------------------------------------------------------------
+*/
+
+export function validateAnswer(
+  text: string
+): {
+  valid: boolean;
+  reason?: string;
+} {
+  const answer =
+    normalizeText(text);
+
+  if (!answer) {
+    return {
+      valid: false,
+      reason:
+        "Please enter an answer.",
+    };
+  }
+
+  if (answer.length < 2) {
+    return {
+      valid: false,
+      reason:
+        "Please enter a little more detail in the answer.",
+    };
+  }
+
+  if (answer.length > 1000) {
+    return {
+      valid: false,
+      reason:
+        "The answer is too long. Please keep it below 1000 characters.",
     };
   }
 
@@ -262,6 +313,10 @@ export function subscribeToQuestions(
             const data =
               document.data();
 
+            /*
+             * Created timestamp.
+             */
+
             let createdAt:
               Date | null = null;
 
@@ -274,6 +329,24 @@ export function subscribeToQuestions(
             ) {
               createdAt =
                 data.createdAt.toDate();
+            }
+
+            /*
+             * Answered timestamp.
+             */
+
+            let answeredAt:
+              Date | null = null;
+
+            if (
+              data.answeredAt &&
+              typeof data
+                .answeredAt
+                .toDate ===
+                "function"
+            ) {
+              answeredAt =
+                data.answeredAt.toDate();
             }
 
             return {
@@ -303,6 +376,14 @@ export function subscribeToQuestions(
                 "answered"
                   ? "answered"
                   : "visible",
+
+              answer:
+                typeof data.answer ===
+                "string"
+                  ? data.answer
+                  : undefined,
+
+              answeredAt,
 
               createdAt,
             };
@@ -346,11 +427,66 @@ export function subscribeToQuestions(
 
 /*
 |--------------------------------------------------------------------------
-| Mark question as answered
+| Answer anonymous question
 |--------------------------------------------------------------------------
 |
 | Faculty-side action.
+|--------------------------------------------------------------------------
+*/
+
+export async function answerAnonymousQuestion(
+  questionId: string,
+  answer: string
+): Promise<void> {
+  const cleanId =
+    questionId.trim();
+
+  if (!cleanId) {
+    throw new Error(
+      "Question ID is missing."
+    );
+  }
+
+  const validation =
+    validateAnswer(answer);
+
+  if (!validation.valid) {
+    throw new Error(
+      validation.reason ||
+        "Invalid answer."
+    );
+  }
+
+  const cleanAnswer =
+    normalizeText(answer);
+
+  await updateDoc(
+    doc(
+      db,
+      "questions",
+      cleanId
+    ),
+    {
+      answer:
+        cleanAnswer,
+
+      status:
+        "answered",
+
+      answeredAt:
+        serverTimestamp(),
+    }
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| Mark question as answered
+|--------------------------------------------------------------------------
 |
+| Kept for backwards compatibility
+| with your existing faculty code.
+|--------------------------------------------------------------------------
 */
 
 export async function markQuestionAnswered(
@@ -374,6 +510,9 @@ export async function markQuestionAnswered(
     {
       status:
         "answered",
+
+      answeredAt:
+        serverTimestamp(),
     }
   );
 }
