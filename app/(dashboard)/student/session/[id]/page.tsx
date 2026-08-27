@@ -1,4 +1,3 @@
-
 "use client"
 
 import {
@@ -65,7 +64,6 @@ export default function StudentSessionPage() {
       ? sessionId
       : undefined
   )
-
   /*
    * Read the current round directly from Firestore-backed session state.
    */
