@@ -1,12 +1,10 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-
 import {
   ArrowLeft,
   MessageCircleQuestion,
 } from "lucide-react";
-
 import AnonymousQuestion from "@/app/components/student/AnonymousQuestion";
 
 export default function StudentQuestionsPage() {
@@ -25,7 +23,6 @@ export default function StudentQuestionsPage() {
       <div className="mx-auto w-full max-w-3xl">
 
         {/* Back button */}
-
         <button
           type="button"
           onClick={() => router.back()}
@@ -36,11 +33,9 @@ export default function StudentQuestionsPage() {
         </button>
 
         {/* Page heading */}
-
         <div className="mb-6">
           <div className="flex items-center gap-2 text-cyan-400">
             <MessageCircleQuestion className="h-5 w-5" />
-
             <span className="text-xs font-bold uppercase tracking-[0.2em]">
               Student Voice
             </span>
@@ -58,17 +53,13 @@ export default function StudentQuestionsPage() {
         </div>
 
         {/* Anonymous question box */}
-
         {sessionId ? (
-          <AnonymousQuestion
-            sessionId={sessionId}
-          />
+          <AnonymousQuestion sessionId={sessionId} />
         ) : (
           <div className="rounded-2xl border border-red-400/10 bg-red-400/5 p-5">
             <p className="text-sm font-semibold text-red-300">
               Session not found
             </p>
-
             <p className="mt-1 text-xs text-red-300/60">
               The session ID is missing from this page.
             </p>
@@ -76,12 +67,10 @@ export default function StudentQuestionsPage() {
         )}
 
         {/* Information */}
-
         <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
           <p className="text-xs font-semibold text-white/45">
             💡 Tip
           </p>
-
           <p className="mt-1 text-xs leading-5 text-white/25">
             Instead of saying &quot;I don&apos;t understand&quot;,
             mention the exact concept that confused you.
