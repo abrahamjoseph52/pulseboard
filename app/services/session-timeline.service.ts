@@ -48,12 +48,17 @@ export interface TimelineRound {
 
 /*
 |--------------------------------------------------------------------------
-| Normalize pulse signal
+| Normalize existing PulseBoard signals
 |--------------------------------------------------------------------------
 |
-| Supports several common formats so we don't have to modify
-| your existing Live Pulse implementation.
+| Existing:
 |
+| got_it
+| slightly_lost
+| confused
+| interesting
+|
+|--------------------------------------------------------------------------
 */
 
 function normalizeSignal(
@@ -72,7 +77,14 @@ function normalizeSignal(
     .trim()
     .replace(/[_-]/g, " ");
 
+  /*
+  |--------------------------------------------------------------------------
+  | Confused
+  |--------------------------------------------------------------------------
+  */
+
   if (
+    value === "confused" ||
     value.includes("confus") ||
     value.includes("unclear") ||
     value.includes("not understand") ||
@@ -81,8 +93,16 @@ function normalizeSignal(
     return "confused";
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Partial
+  |--------------------------------------------------------------------------
+  */
+
   if (
+    value === "slightly lost" ||
     value.includes("partial") ||
+    value.includes("slightly lost") ||
     value.includes("somewhat") ||
     value.includes("maybe") ||
     value === "yellow"
@@ -90,12 +110,21 @@ function normalizeSignal(
     return "partial";
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Understood
+  |--------------------------------------------------------------------------
+  */
+
   if (
-    value.includes("understood") ||
+    value === "got it" ||
+    value === "got_it" ||
+    value === "understood" ||
     value.includes("understand") ||
     value.includes("clear") ||
     value.includes("good") ||
-    value === "green"
+    value === "green" ||
+    value === "interesting"
   ) {
     return "understood";
   }
@@ -105,7 +134,7 @@ function normalizeSignal(
 
 /*
 |--------------------------------------------------------------------------
-| Get round number
+| Get round
 |--------------------------------------------------------------------------
 */
 
@@ -117,14 +146,21 @@ function getRound(
     data.roundNumber ??
     data.pulseRound;
 
-  if (typeof value === "number") {
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0
+  ) {
     return value;
   }
 
   if (typeof value === "string") {
     const parsed = Number(value);
 
-    if (!Number.isNaN(parsed)) {
+    if (
+      Number.isInteger(parsed) &&
+      parsed > 0
+    ) {
       return parsed;
     }
   }
@@ -146,6 +182,12 @@ function getTimestamp(
     data.createdAt ??
     data.time;
 
+  /*
+  |--------------------------------------------------------------------------
+  | Firestore Timestamp
+  |--------------------------------------------------------------------------
+  */
+
   if (
     value &&
     typeof value === "object" &&
@@ -163,20 +205,46 @@ function getTimestamp(
     ).toDate();
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Date
+  |--------------------------------------------------------------------------
+  */
+
   if (value instanceof Date) {
     return value;
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Milliseconds
+  |--------------------------------------------------------------------------
+  */
+
   if (typeof value === "number") {
-    return new Date(value);
+    const date = new Date(value);
+
+    return Number.isNaN(
+      date.getTime()
+    )
+      ? null
+      : date;
   }
 
-  if (typeof value === "string") {
-    const parsed = new Date(value);
+  /*
+  |--------------------------------------------------------------------------
+  | String
+  |--------------------------------------------------------------------------
+  */
 
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed;
-    }
+  if (typeof value === "string") {
+    const date = new Date(value);
+
+    return Number.isNaN(
+      date.getTime()
+    )
+      ? null
+      : date;
   }
 
   return null;
@@ -184,7 +252,7 @@ function getTimestamp(
 
 /*
 |--------------------------------------------------------------------------
-| Build timeline
+| Calculate timeline
 |--------------------------------------------------------------------------
 */
 
@@ -204,14 +272,25 @@ export function calculateSessionTimeline(
     }
   > = {};
 
+  /*
+  |--------------------------------------------------------------------------
+  | Group signals by round
+  |--------------------------------------------------------------------------
+  */
+
   for (const data of documents) {
-    const round = getRound(data);
+    const round =
+      getRound(data);
 
-    const signal = normalizeSignal(
-      data.signal
-    );
+    const signal =
+      normalizeSignal(
+        data.signal
+      );
 
-    if (round === null || !signal) {
+    if (
+      round === null ||
+      !signal
+    ) {
       continue;
     }
 
@@ -228,88 +307,112 @@ export function calculateSessionTimeline(
       };
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Count signal
+    |--------------------------------------------------------------------------
+    */
+
+    roundMap[round][signal]++;
+
+    /*
+    |--------------------------------------------------------------------------
+    | Keep earliest timestamp
+    |--------------------------------------------------------------------------
+    */
+
     const timestamp =
       getTimestamp(data);
 
     if (
       timestamp &&
-      (!roundMap[round].timestamp ||
+      (
+        !roundMap[round]
+          .timestamp ||
         timestamp <
           roundMap[round]
-            .timestamp!)
+            .timestamp!
+      )
     ) {
-      roundMap[round].timestamp =
+      roundMap[round]
+        .timestamp =
         timestamp;
     }
-
-    roundMap[round][signal]++;
   }
-
-  const rounds = Object.entries(
-    roundMap
-  ).map(
-    ([roundNumber, values]) => {
-      const round = Number(
-        roundNumber
-      );
-
-      const totalResponses =
-        values.confused +
-        values.partial +
-        values.understood;
-
-      const confusionPercentage =
-        totalResponses === 0
-          ? 0
-          : Math.round(
-              (values.confused /
-                totalResponses) *
-                100
-            );
-
-      const understandingPercentage =
-        totalResponses === 0
-          ? 0
-          : Math.round(
-              (values.understood /
-                totalResponses) *
-                100
-            );
-
-      return {
-        round,
-
-        timestamp:
-          values.timestamp,
-
-        totalResponses,
-
-        confusedCount:
-          values.confused,
-
-        partialCount:
-          values.partial,
-
-        understoodCount:
-          values.understood,
-
-        understandingPercentage,
-
-        confusionPercentage,
-
-        level:
-          "stable" as TimelineLevel,
-
-        title: "",
-
-        description: "",
-      };
-    }
-  );
 
   /*
   |--------------------------------------------------------------------------
-  | Sort chronologically
+  | Build rounds
+  |--------------------------------------------------------------------------
+  */
+
+  const rounds =
+    Object.entries(
+      roundMap
+    ).map(
+      ([roundNumber, values]) => {
+        const round =
+          Number(
+            roundNumber
+          );
+
+        const totalResponses =
+          values.confused +
+          values.partial +
+          values.understood;
+
+        const confusionPercentage =
+          totalResponses === 0
+            ? 0
+            : Math.round(
+                (values.confused /
+                  totalResponses) *
+                  100
+              );
+
+        const understandingPercentage =
+          totalResponses === 0
+            ? 0
+            : Math.round(
+                (values.understood /
+                  totalResponses) *
+                  100
+              );
+
+        return {
+          round,
+
+          timestamp:
+            values.timestamp,
+
+          totalResponses,
+
+          confusedCount:
+            values.confused,
+
+          partialCount:
+            values.partial,
+
+          understoodCount:
+            values.understood,
+
+          understandingPercentage,
+
+          confusionPercentage,
+
+          level:
+            "stable" as TimelineLevel,
+
+          title: "",
+
+          description: "",
+        };
+      }
+    );
+
+  /*
+  |--------------------------------------------------------------------------
+  | Sort by round
   |--------------------------------------------------------------------------
   */
 
@@ -320,7 +423,7 @@ export function calculateSessionTimeline(
 
   /*
   |--------------------------------------------------------------------------
-  | Determine classroom story
+  | Build classroom story
   |--------------------------------------------------------------------------
   */
 
@@ -350,7 +453,8 @@ export function calculateSessionTimeline(
         current.understandingPercentage >=
         70
       ) {
-        current.level = "strong";
+        current.level =
+          "strong";
 
         current.title =
           "Strong start";
@@ -361,7 +465,8 @@ export function calculateSessionTimeline(
         current.confusionPercentage >=
         50
       ) {
-        current.level = "critical";
+        current.level =
+          "critical";
 
         current.title =
           "Early learning gap";
@@ -369,7 +474,8 @@ export function calculateSessionTimeline(
         current.description =
           "The class showed significant confusion at the beginning of the session.";
       } else {
-        current.level = "stable";
+        current.level =
+          "stable";
 
         current.title =
           "Session started";
@@ -465,7 +571,7 @@ export function calculateSessionTimeline(
 
     /*
     |--------------------------------------------------------------------------
-    | Strong understanding
+    | Strong
     |--------------------------------------------------------------------------
     */
 
@@ -481,7 +587,15 @@ export function calculateSessionTimeline(
 
       current.description =
         "Most students are following the concept confidently.";
-    } else if (
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Warning
+    |--------------------------------------------------------------------------
+    */
+
+    else if (
       current.confusionPercentage >=
       25
     ) {
@@ -493,7 +607,15 @@ export function calculateSessionTimeline(
 
       current.description =
         "A noticeable group of students may need additional explanation.";
-    } else {
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Stable
+    |--------------------------------------------------------------------------
+    */
+
+    else {
       current.level =
         "stable";
 
@@ -513,7 +635,7 @@ export function calculateSessionTimeline(
 
 /*
 |--------------------------------------------------------------------------
-| Subscribe to timeline
+| REAL-TIME SUBSCRIPTION
 |--------------------------------------------------------------------------
 */
 
@@ -526,7 +648,10 @@ export function subscribeToSessionTimeline(
     error: Error
   ) => void
 ): () => void {
-  if (!sessionId) {
+  const cleanSessionId =
+    sessionId.trim();
+
+  if (!cleanSessionId) {
     callback([]);
 
     return () => {};
@@ -537,12 +662,19 @@ export function subscribeToSessionTimeline(
     where(
       "sessionId",
       "==",
-      sessionId
+      cleanSessionId
     )
   );
 
+  /*
+  |--------------------------------------------------------------------------
+  | onSnapshot = REAL TIME
+  |--------------------------------------------------------------------------
+  */
+
   return onSnapshot(
     signalsQuery,
+
     (snapshot) => {
       const documents =
         snapshot.docs.map(
@@ -560,13 +692,16 @@ export function subscribeToSessionTimeline(
 
       callback(timeline);
     },
+
     (error) => {
       console.error(
         "Session timeline error:",
         error
       );
 
-      onError?.(error);
+      onError?.(
+        error
+      );
     }
   );
 }
@@ -580,7 +715,9 @@ export function subscribeToSessionTimeline(
 export function getTimelineSummary(
   timeline: TimelineRound[]
 ) {
-  if (timeline.length === 0) {
+  if (
+    timeline.length === 0
+  ) {
     return {
       totalRounds: 0,
 

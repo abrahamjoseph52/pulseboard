@@ -6,14 +6,13 @@ import {
   onSnapshot,
   query,
   where,
-  type Timestamp,
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
 
 /*
 |--------------------------------------------------------------------------
-| Types
+| TYPES
 |--------------------------------------------------------------------------
 */
 
@@ -89,7 +88,7 @@ export interface ClassroomIntelligence {
 
 /*
 |--------------------------------------------------------------------------
-| Helpers
+| INTERNAL TYPES
 |--------------------------------------------------------------------------
 */
 
@@ -98,30 +97,39 @@ type RawDocument = Record<string, unknown>;
 type SignalKind =
   | "understood"
   | "partial"
-  | "confused";
-
-interface SessionRoundInfo {
-  topic: string;
-  timestamp: Date | null;
-}
+  | "confused"
+  | "interesting";
 
 interface TopicCounter {
   round: number;
   topic: string;
+
   understood: number;
   partial: number;
   confused: number;
+  interesting: number;
 }
 
 interface RoundCounter {
   round: number;
+
   understood: number;
   partial: number;
   confused: number;
+  interesting: number;
+
   timestamp: Date | null;
 }
 
-function getDate(value: unknown): Date | null {
+/*
+|--------------------------------------------------------------------------
+| DATE HELPER
+|--------------------------------------------------------------------------
+*/
+
+function getDate(
+  value: unknown
+): Date | null {
   if (!value) {
     return null;
   }
@@ -142,16 +150,20 @@ function getDate(value: unknown): Date | null {
       }
     ).toDate === "function"
   ) {
-    const date = (
-      value as {
-        toDate: () => Date;
-      }
-    ).toDate();
+    try {
+      const date = (
+        value as {
+          toDate: () => Date;
+        }
+      ).toDate();
 
-    return date instanceof Date &&
-      !Number.isNaN(date.getTime())
-      ? date
-      : null;
+      return date instanceof Date &&
+        !Number.isNaN(date.getTime())
+        ? date
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   if (typeof value === "number") {
@@ -173,7 +185,15 @@ function getDate(value: unknown): Date | null {
   return null;
 }
 
-function normalizeRound(value: unknown): number | null {
+/*
+|--------------------------------------------------------------------------
+| ROUND HELPER
+|--------------------------------------------------------------------------
+*/
+
+function normalizeRound(
+  value: unknown
+): number | null {
   if (
     typeof value === "number" &&
     Number.isInteger(value) &&
@@ -198,19 +218,17 @@ function normalizeRound(value: unknown): number | null {
 
 /*
 |--------------------------------------------------------------------------
-| Signal normalization
+| SIGNAL NORMALIZATION
 |--------------------------------------------------------------------------
 |
-| Your existing feedback.service uses:
+| Supported existing values:
 |
 | got_it
 | slightly_lost
 | confused
 | interesting
 |
-| We intentionally treat "interesting" as neutral here.
-| It is NOT counted as understanding.
-|
+|--------------------------------------------------------------------------
 */
 
 function normalizeSignal(
@@ -225,18 +243,32 @@ function normalizeSignal(
     .trim()
     .replace(/[_-]/g, " ");
 
+  /*
+  |--------------------------------------------------------------------------
+  | UNDERSTOOD
+  |--------------------------------------------------------------------------
+  */
+
   if (
-    signal === "confused" ||
-    signal.includes("confus") ||
-    signal.includes("unclear") ||
-    signal.includes("not understand") ||
-    signal === "red"
+    signal === "got it" ||
+    signal === "gotit" ||
+    signal === "understood" ||
+    signal.includes("understand") ||
+    signal.includes("clear") ||
+    signal === "green"
   ) {
-    return "confused";
+    return "understood";
   }
+
+  /*
+  |--------------------------------------------------------------------------
+  | PARTIAL
+  |--------------------------------------------------------------------------
+  */
 
   if (
     signal === "slightly lost" ||
+    signal === "slightlylost" ||
     signal.includes("slightly lost") ||
     signal.includes("partial") ||
     signal.includes("somewhat") ||
@@ -246,14 +278,37 @@ function normalizeSignal(
     return "partial";
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | CONFUSED
+  |--------------------------------------------------------------------------
+  */
+
   if (
-    signal === "got it" ||
-    signal === "understood" ||
-    signal.includes("understand") ||
-    signal.includes("clear") ||
-    signal === "green"
+    signal === "confused" ||
+    signal.includes("confus") ||
+    signal.includes("unclear") ||
+    signal.includes("not understand") ||
+    signal.includes("lost") ||
+    signal === "red"
   ) {
-    return "understood";
+    return "confused";
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | INTERESTING / NEUTRAL
+  |--------------------------------------------------------------------------
+  |
+  | This is a valid pulse, but it does not mean "understood".
+  |
+  */
+
+  if (
+    signal === "interesting" ||
+    signal.includes("interesting")
+  ) {
+    return "interesting";
   }
 
   return null;
@@ -261,7 +316,7 @@ function normalizeSignal(
 
 /*
 |--------------------------------------------------------------------------
-| Question helpers
+| QUESTION HELPERS
 |--------------------------------------------------------------------------
 */
 
@@ -323,25 +378,39 @@ function isAnsweredQuestion(
 
 /*
 |--------------------------------------------------------------------------
-| Session round/topic extraction
+| SIGNAL ROUND EXTRACTION
 |--------------------------------------------------------------------------
-|
-| Existing Session type contains:
-|
-| currentRound
-| roundTopic
-|
-| For historical rounds we also support:
-|
-| rounds: [...]
-|
+*/
+
+function getSignalRound(
+  data: RawDocument
+): number | null {
+  return normalizeRound(
+    data.round ??
+      data.roundNumber ??
+      data.pulseRound ??
+      data.currentRound
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| SESSION TOPIC EXTRACTION
+|--------------------------------------------------------------------------
 */
 
 function getSessionRoundTopic(
   sessionData: RawDocument,
   round: number
 ): string {
-  const rounds = sessionData.rounds;
+  /*
+  |--------------------------------------------------------------------------
+  | Historical rounds
+  |--------------------------------------------------------------------------
+  */
+
+  const rounds =
+    sessionData.rounds;
 
   if (Array.isArray(rounds)) {
     for (const item of rounds) {
@@ -358,7 +427,8 @@ function getSessionRoundTopic(
       const itemRound =
         normalizeRound(
           roundData.round ??
-            roundData.roundNumber
+            roundData.roundNumber ??
+            roundData.number
         );
 
       if (itemRound !== round) {
@@ -368,7 +438,9 @@ function getSessionRoundTopic(
       const topicValues = [
         roundData.topic,
         roundData.topicName,
+        roundData.roundTopic,
         roundData.title,
+        roundData.subject,
       ];
 
       for (const value of topicValues) {
@@ -382,26 +454,50 @@ function getSessionRoundTopic(
     }
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Current round
+  |--------------------------------------------------------------------------
+  */
+
   const currentRound =
     normalizeRound(
       sessionData.currentRound
     );
 
   if (
-    currentRound === round &&
-    typeof sessionData.roundTopic ===
-      "string" &&
-    sessionData.roundTopic.trim()
+    currentRound === round
   ) {
-    return sessionData.roundTopic.trim();
+    const currentTopicValues = [
+      sessionData.roundTopic,
+      sessionData.topic,
+      sessionData.topicName,
+    ];
+
+    for (
+      const value of currentTopicValues
+    ) {
+      if (
+        typeof value === "string" &&
+        value.trim()
+      ) {
+        return value.trim();
+      }
+    }
   }
+
+  /*
+  |--------------------------------------------------------------------------
+  | Generic fallback
+  |--------------------------------------------------------------------------
+  */
 
   return `Round ${round}`;
 }
 
 /*
 |--------------------------------------------------------------------------
-| Percentage helper
+| PERCENTAGE
 |--------------------------------------------------------------------------
 */
 
@@ -420,7 +516,7 @@ function percentage(
 
 /*
 |--------------------------------------------------------------------------
-| Analyse signals
+| ANALYSE SIGNALS
 |--------------------------------------------------------------------------
 */
 
@@ -432,6 +528,15 @@ function analyseSignals(
   let partialCount = 0;
   let confusedCount = 0;
 
+  /*
+  |--------------------------------------------------------------------------
+  | Interesting is counted as a pulse response,
+  | but not as understanding/confusion.
+  |--------------------------------------------------------------------------
+  */
+
+  let interestingCount = 0;
+
   const topicMap =
     new Map<number, TopicCounter>();
 
@@ -440,14 +545,19 @@ function analyseSignals(
 
   for (const data of documents) {
     const signal =
-      normalizeSignal(data.signal);
+      normalizeSignal(
+        data.signal
+      );
 
     if (!signal) {
       continue;
     }
 
-    const round =
-      normalizeRound(data.round);
+    /*
+    |--------------------------------------------------------------------------
+    | Overall counts
+    |--------------------------------------------------------------------------
+    */
 
     if (signal === "understood") {
       understoodCount++;
@@ -461,15 +571,35 @@ function analyseSignals(
       confusedCount++;
     }
 
+    if (signal === "interesting") {
+      interestingCount++;
+    }
+
     /*
     |--------------------------------------------------------------------------
-    | If old signal has no round, keep it in overall totals
+    | Round
+    |--------------------------------------------------------------------------
+    */
+
+    const round =
+      getSignalRound(data);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Signals without a round still count
+    | toward total classroom pulse responses.
     |--------------------------------------------------------------------------
     */
 
     if (round === null) {
       continue;
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Topic
+    |--------------------------------------------------------------------------
+    */
 
     const topic =
       getSessionRoundTopic(
@@ -478,13 +608,18 @@ function analyseSignals(
       );
 
     if (!topicMap.has(round)) {
-      topicMap.set(round, {
+      topicMap.set(
         round,
-        topic,
-        understood: 0,
-        partial: 0,
-        confused: 0,
-      });
+        {
+          round,
+          topic,
+
+          understood: 0,
+          partial: 0,
+          confused: 0,
+          interesting: 0,
+        }
+      );
     }
 
     const topicCounter =
@@ -492,14 +627,26 @@ function analyseSignals(
 
     topicCounter[signal]++;
 
+    /*
+    |--------------------------------------------------------------------------
+    | Timeline round
+    |--------------------------------------------------------------------------
+    */
+
     if (!roundMap.has(round)) {
-      roundMap.set(round, {
+      roundMap.set(
         round,
-        understood: 0,
-        partial: 0,
-        confused: 0,
-        timestamp: null,
-      });
+        {
+          round,
+
+          understood: 0,
+          partial: 0,
+          confused: 0,
+          interesting: 0,
+
+          timestamp: null,
+        }
+      );
     }
 
     const roundCounter =
@@ -507,11 +654,18 @@ function analyseSignals(
 
     roundCounter[signal]++;
 
-    const timestamp = getDate(
-      data.timestamp ??
-        data.createdAt ??
-        data.time
-    );
+    /*
+    |--------------------------------------------------------------------------
+    | Timestamp
+    |--------------------------------------------------------------------------
+    */
+
+    const timestamp =
+      getDate(
+        data.timestamp ??
+          data.createdAt ??
+          data.time
+      );
 
     if (
       timestamp &&
@@ -526,7 +680,30 @@ function analyseSignals(
     }
   }
 
-  const totalResponses =
+  /*
+  |--------------------------------------------------------------------------
+  | TOTAL PULSE RESPONSES
+  |--------------------------------------------------------------------------
+  */
+
+  const totalPulseResponses =
+    understoodCount +
+    partialCount +
+    confusedCount +
+    interestingCount;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Comprehension percentage
+  |--------------------------------------------------------------------------
+  |
+  | "Interesting" is excluded from the comprehension denominator because
+  | it doesn't tell us whether the student understood or was confused.
+  |
+  |--------------------------------------------------------------------------
+  */
+
+  const comprehensionResponses =
     understoodCount +
     partialCount +
     confusedCount;
@@ -534,26 +711,32 @@ function analyseSignals(
   const understandingPercentage =
     percentage(
       understoodCount,
-      totalResponses
+      comprehensionResponses
     );
 
   const confusionPercentage =
     percentage(
       confusedCount,
-      totalResponses
+      comprehensionResponses
     );
 
   const partialPercentage =
     percentage(
       partialCount,
-      totalResponses
+      comprehensionResponses
     );
+
+  /*
+  |--------------------------------------------------------------------------
+  | TOPICS
+  |--------------------------------------------------------------------------
+  */
 
   const topics: IntelligenceTopic[] =
     Array.from(
       topicMap.values()
     ).map((item) => {
-      const total =
+      const comprehensionTotal =
         item.understood +
         item.partial +
         item.confused;
@@ -561,13 +744,13 @@ function analyseSignals(
       const confusion =
         percentage(
           item.confused,
-          total
+          comprehensionTotal
         );
 
       const understanding =
         percentage(
           item.understood,
-          total
+          comprehensionTotal
         );
 
       let level:
@@ -576,15 +759,22 @@ function analyseSignals(
         | "critical" =
         "strong";
 
-      if (confusion >= 50) {
+      if (
+        confusion >= 50
+      ) {
         level = "critical";
-      } else if (confusion >= 25) {
+      } else if (
+        confusion >= 25
+      ) {
         level = "moderate";
       }
 
       return {
-        topic: item.topic,
-        round: item.round,
+        topic:
+          item.topic,
+
+        round:
+          item.round,
 
         confusionPercentage:
           confusion,
@@ -601,21 +791,56 @@ function analyseSignals(
         understoodCount:
           item.understood,
 
-        totalResponses: total,
+        totalResponses:
+          comprehensionTotal,
 
         level,
       };
     });
 
-  topics.sort(
-    (a, b) =>
-      b.confusionPercentage -
+  /*
+  |--------------------------------------------------------------------------
+  | Sort learning gaps
+  |--------------------------------------------------------------------------
+  |
+  | Critical topics first, then confusion %, then response count.
+  |--------------------------------------------------------------------------
+  */
+
+  topics.sort((a, b) => {
+    const levelWeight = {
+      critical: 3,
+      moderate: 2,
+      strong: 1,
+    };
+
+    const levelDifference =
+      levelWeight[b.level] -
+      levelWeight[a.level];
+
+    if (levelDifference !== 0) {
+      return levelDifference;
+    }
+
+    if (
+      b.confusionPercentage !==
       a.confusionPercentage
-  );
+    ) {
+      return (
+        b.confusionPercentage -
+        a.confusionPercentage
+      );
+    }
+
+    return (
+      b.totalResponses -
+      a.totalResponses
+    );
+  });
 
   /*
   |--------------------------------------------------------------------------
-  | Timeline
+  | TIMELINE
   |--------------------------------------------------------------------------
   */
 
@@ -624,27 +849,29 @@ function analyseSignals(
       roundMap.values()
     )
       .map((item) => {
-        const total =
+        const comprehensionTotal =
           item.understood +
           item.partial +
           item.confused;
 
         return {
-          round: item.round,
+          round:
+            item.round,
 
           understandingPercentage:
             percentage(
               item.understood,
-              total
+              comprehensionTotal
             ),
 
           confusionPercentage:
             percentage(
               item.confused,
-              total
+              comprehensionTotal
             ),
 
-          level: "stable" as const,
+          level:
+            "stable" as const,
 
           title:
             "Understanding stable",
@@ -663,7 +890,7 @@ function analyseSignals(
 
   /*
   |--------------------------------------------------------------------------
-  | Interpret timeline
+  | TIMELINE INTERPRETATION
   |--------------------------------------------------------------------------
   */
 
@@ -671,33 +898,64 @@ function analyseSignals(
     | number
     | null = null;
 
-  for (let i = 0; i < timeline.length; i++) {
+  for (
+    let i = 0;
+    i < timeline.length;
+    i++
+  ) {
     const current =
       timeline[i];
+
+    /*
+    |--------------------------------------------------------------------------
+    | First round
+    |--------------------------------------------------------------------------
+    */
 
     if (i === 0) {
       if (
         current.understandingPercentage >=
         70
       ) {
-        current.level = "strong";
+        current.level =
+          "strong";
+
         current.title =
           "Strong start";
+
         current.description =
           "Students began the session with good understanding.";
       } else if (
         current.confusionPercentage >=
         50
       ) {
-        current.level = "critical";
+        current.level =
+          "critical";
+
         current.title =
           "Early learning gap";
+
         current.description =
           "Significant confusion was detected early in the session.";
+      } else if (
+        current.confusionPercentage >=
+        25
+      ) {
+        current.level =
+          "warning";
+
+        current.title =
+          "Early confusion";
+
+        current.description =
+          "A noticeable group of students may need additional explanation.";
       } else {
-        current.level = "stable";
+        current.level =
+          "stable";
+
         current.title =
           "Session started";
+
         current.description =
           "The class started with a mixed level of understanding.";
       }
@@ -708,59 +966,123 @@ function analyseSignals(
       continue;
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Critical
+    |--------------------------------------------------------------------------
+    */
+
     if (
       current.confusionPercentage >=
       50
     ) {
-      current.level = "critical";
+      current.level =
+        "critical";
+
       current.title =
         "Major learning dip";
+
       current.description =
         "A large portion of students are showing confusion.";
-    } else if (
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Recovery
+    |--------------------------------------------------------------------------
+    */
+
+    else if (
       previousUnderstanding !== null &&
       current.understandingPercentage -
         previousUnderstanding >=
         15
     ) {
-      current.level = "recovery";
+      current.level =
+        "recovery";
+
       current.title =
         "Understanding recovered";
+
       current.description =
         "Student understanding improved significantly.";
-    } else if (
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Drop
+    |--------------------------------------------------------------------------
+    */
+
+    else if (
       previousUnderstanding !== null &&
       previousUnderstanding -
         current.understandingPercentage >=
         15
     ) {
-      current.level = "warning";
+      current.level =
+        "warning";
+
       current.title =
         "Understanding dropped";
+
       current.description =
         "Student understanding decreased noticeably.";
-    } else if (
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Strong
+    |--------------------------------------------------------------------------
+    */
+
+    else if (
       current.understandingPercentage >=
       70
     ) {
-      current.level = "strong";
+      current.level =
+        "strong";
+
       current.title =
         "Strong understanding";
+
       current.description =
         "Most students are following the concept confidently.";
-    } else if (
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Warning
+    |--------------------------------------------------------------------------
+    */
+
+    else if (
       current.confusionPercentage >=
       25
     ) {
-      current.level = "warning";
+      current.level =
+        "warning";
+
       current.title =
         "Confusion increasing";
+
       current.description =
         "A noticeable group of students may need additional explanation.";
-    } else {
-      current.level = "stable";
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Stable
+    |--------------------------------------------------------------------------
+    */
+
+    else {
+      current.level =
+        "stable";
+
       current.title =
         "Understanding stable";
+
       current.description =
         "The classroom is maintaining a stable learning pattern.";
     }
@@ -770,8 +1092,7 @@ function analyseSignals(
   }
 
   return {
-    totalPulseResponses:
-      totalResponses,
+    totalPulseResponses,
 
     understoodCount,
     partialCount,
@@ -788,7 +1109,7 @@ function analyseSignals(
 
 /*
 |--------------------------------------------------------------------------
-| Main realtime subscription
+| MAIN REALTIME SUBSCRIPTION
 |--------------------------------------------------------------------------
 */
 
@@ -804,6 +1125,12 @@ export function subscribeToClassroomIntelligence(
   const cleanSessionId =
     sessionId.trim();
 
+  /*
+  |--------------------------------------------------------------------------
+  | Empty session
+  |--------------------------------------------------------------------------
+  */
+
   if (!cleanSessionId) {
     callback(
       createEmptyIntelligence()
@@ -814,7 +1141,7 @@ export function subscribeToClassroomIntelligence(
 
   /*
   |--------------------------------------------------------------------------
-  | Firestore references
+  | FIRESTORE REFERENCES
   |--------------------------------------------------------------------------
   */
 
@@ -845,6 +1172,12 @@ export function subscribeToClassroomIntelligence(
       )
     );
 
+  /*
+  |--------------------------------------------------------------------------
+  | REALTIME STATE
+  |--------------------------------------------------------------------------
+  */
+
   let sessionData:
     RawDocument = {};
 
@@ -857,14 +1190,25 @@ export function subscribeToClassroomIntelligence(
       data: RawDocument;
     }[] = [];
 
-  let sessionLoaded = false;
-  let signalsLoaded = false;
-  let questionsLoaded = false;
+  let sessionLoaded =
+    false;
+
+  let signalsLoaded =
+    false;
+
+  let questionsLoaded =
+    false;
+
+  /*
+  |--------------------------------------------------------------------------
+  | PUBLISH
+  |--------------------------------------------------------------------------
+  */
 
   function publish() {
     /*
     |--------------------------------------------------------------------------
-    | Wait until all realtime sources have responded once
+    | Wait for initial snapshots
     |--------------------------------------------------------------------------
     */
 
@@ -876,16 +1220,30 @@ export function subscribeToClassroomIntelligence(
       return;
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Analyse classroom signals
+    |--------------------------------------------------------------------------
+    */
+
     const analysis =
       analyseSignals(
         signalDocuments,
         sessionData
       );
 
-    const questions: IntelligenceQuestion[] =
+    /*
+    |--------------------------------------------------------------------------
+    | Questions
+    |--------------------------------------------------------------------------
+    */
+
+    const questions:
+      IntelligenceQuestion[] =
       questionDocuments.map(
         (item) => ({
-          id: item.id,
+          id:
+            item.id,
 
           text:
             getQuestionText(
@@ -905,6 +1263,12 @@ export function subscribeToClassroomIntelligence(
         })
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Question counts
+    |--------------------------------------------------------------------------
+    */
+
     const answeredQuestions =
       questions.filter(
         isAnsweredQuestion
@@ -916,6 +1280,12 @@ export function subscribeToClassroomIntelligence(
         questions.length -
           answeredQuestions
       );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Topic groups
+    |--------------------------------------------------------------------------
+    */
 
     const criticalTopics =
       analysis.topics.filter(
@@ -938,6 +1308,12 @@ export function subscribeToClassroomIntelligence(
           "strong"
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Timeline groups
+    |--------------------------------------------------------------------------
+    */
+
     const criticalMoments =
       analysis.timeline.filter(
         (item) =>
@@ -952,6 +1328,12 @@ export function subscribeToClassroomIntelligence(
           "recovery"
       );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Biggest learning gap
+    |--------------------------------------------------------------------------
+    */
+
     const biggestLearningGap =
       analysis.topics.length > 0
         ? analysis.topics[0]
@@ -959,7 +1341,7 @@ export function subscribeToClassroomIntelligence(
 
     /*
     |--------------------------------------------------------------------------
-    | Current classroom status
+    | CURRENT CLASSROOM STATUS
     |--------------------------------------------------------------------------
     */
 
@@ -974,22 +1356,25 @@ export function subscribeToClassroomIntelligence(
       analysis.confusionPercentage >=
       50
     ) {
-      currentStatus = "critical";
+      currentStatus =
+        "critical";
     } else if (
       analysis.confusionPercentage >=
       30
     ) {
-      currentStatus = "attention";
+      currentStatus =
+        "attention";
     } else if (
       analysis.understandingPercentage >=
       75
     ) {
-      currentStatus = "excellent";
+      currentStatus =
+        "excellent";
     }
 
     /*
     |--------------------------------------------------------------------------
-    | Faculty action
+    | FACULTY ACTION
     |--------------------------------------------------------------------------
     */
 
@@ -1023,11 +1408,17 @@ export function subscribeToClassroomIntelligence(
     ) {
       facultyAction =
         "The class recovered after a learning dip. Reinforce the concept that helped students recover.";
+    } else if (
+      analysis.totalPulseResponses ===
+      0
+    ) {
+      facultyAction =
+        "Start collecting Live Pulse responses to generate classroom intelligence.";
     }
 
     /*
     |--------------------------------------------------------------------------
-    | Classroom summary
+    | CLASSROOM SUMMARY
     |--------------------------------------------------------------------------
     */
 
@@ -1035,6 +1426,12 @@ export function subscribeToClassroomIntelligence(
       "The classroom is showing a mixed learning pattern.";
 
     if (
+      analysis.totalPulseResponses ===
+      0
+    ) {
+      classroomSummary =
+        "No classroom pulse responses have been received yet.";
+    } else if (
       currentStatus ===
       "excellent"
     ) {
@@ -1052,13 +1449,13 @@ export function subscribeToClassroomIntelligence(
     ) {
       classroomSummary =
         "The class is showing learning gaps that deserve attention.";
-    } else if (
-      analysis.totalPulseResponses ===
-      0
-    ) {
-      classroomSummary =
-        "No valid classroom pulse responses have been received yet.";
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | FINAL INTELLIGENCE OBJECT
+    |--------------------------------------------------------------------------
+    */
 
     callback({
       totalPulseResponses:
@@ -1125,7 +1522,9 @@ export function subscribeToClassroomIntelligence(
     onSnapshot(
       sessionRef,
       (snapshot) => {
-        if (snapshot.exists()) {
+        if (
+          snapshot.exists()
+        ) {
           sessionData =
             snapshot.data() as RawDocument;
         } else {
@@ -1142,9 +1541,13 @@ export function subscribeToClassroomIntelligence(
           error
         );
 
+        sessionData = {};
+
         sessionLoaded = true;
 
         onError?.(error);
+
+        publish();
       }
     );
 
@@ -1174,9 +1577,13 @@ export function subscribeToClassroomIntelligence(
           error
         );
 
+        signalDocuments = [];
+
         signalsLoaded = true;
 
         onError?.(error);
+
+        publish();
       }
     );
 
@@ -1208,7 +1615,7 @@ export function subscribeToClassroomIntelligence(
       (error) => {
         /*
         |--------------------------------------------------------------------------
-        | Questions should never break the intelligence dashboard.
+        | Questions must never destroy the intelligence dashboard.
         |--------------------------------------------------------------------------
         */
 
@@ -1221,13 +1628,15 @@ export function subscribeToClassroomIntelligence(
 
         questionsLoaded = true;
 
+        onError?.(error);
+
         publish();
       }
     );
 
   /*
   |--------------------------------------------------------------------------
-  | Cleanup
+  | CLEANUP
   |--------------------------------------------------------------------------
   */
 
@@ -1240,11 +1649,12 @@ export function subscribeToClassroomIntelligence(
 
 /*
 |--------------------------------------------------------------------------
-| Empty state
+| EMPTY STATE
 |--------------------------------------------------------------------------
 */
 
-function createEmptyIntelligence(): ClassroomIntelligence {
+function createEmptyIntelligence():
+  ClassroomIntelligence {
   return {
     totalPulseResponses: 0,
 
@@ -1261,17 +1671,23 @@ function createEmptyIntelligence(): ClassroomIntelligence {
     unansweredQuestions: 0,
 
     topics: [],
+
     criticalTopics: [],
+
     moderateTopics: [],
+
     strongTopics: [],
 
     timeline: [],
+
     criticalMoments: [],
+
     recoveryMoments: [],
 
     biggestLearningGap: null,
 
-    currentStatus: "healthy",
+    currentStatus:
+      "healthy",
 
     facultyAction:
       "Start collecting Live Pulse responses to generate classroom intelligence.",

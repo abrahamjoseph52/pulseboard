@@ -23,6 +23,8 @@ export type LearningLevel =
 export interface LearningGap {
   topic: string;
 
+  round: number;
+
   totalResponses: number;
 
   confusedCount: number;
@@ -42,18 +44,33 @@ export interface LearningGap {
 
 /*
 |--------------------------------------------------------------------------
-| Supported signal values
+| Normalize existing PulseBoard signals
 |--------------------------------------------------------------------------
 |
-| Your existing PulseBoard may use slightly different strings.
-| We normalize them here so the analysis remains isolated from
-| your existing Live Pulse implementation.
+| Existing signals:
 |
+| got_it
+| slightly_lost
+| confused
+| interesting
+|
+| Intelligence model:
+|
+| got_it          -> understood
+| slightly_lost   -> partial
+| confused        -> confused
+| interesting     -> understood
+|
+|--------------------------------------------------------------------------
 */
 
 function normalizeSignal(
   signal: unknown
-): "confused" | "partial" | "understood" | null {
+):
+  | "confused"
+  | "partial"
+  | "understood"
+  | null {
   if (typeof signal !== "string") {
     return null;
   }
@@ -63,30 +80,55 @@ function normalizeSignal(
     .trim()
     .replace(/[_-]/g, " ");
 
+  /*
+  |--------------------------------------------------------------------------
+  | Confused
+  |--------------------------------------------------------------------------
+  */
+
   if (
+    value === "confused" ||
     value.includes("confus") ||
-    value.includes("not understand") ||
     value.includes("unclear") ||
+    value.includes("not understand") ||
     value === "red"
   ) {
     return "confused";
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Partial understanding
+  |--------------------------------------------------------------------------
+  */
+
   if (
+    value === "slightly lost" ||
+    value === "slightly_lost" ||
     value.includes("partial") ||
+    value.includes("slightly lost") ||
     value.includes("somewhat") ||
     value.includes("maybe") ||
-    value.includes("yellow")
+    value === "yellow"
   ) {
     return "partial";
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Strong / positive understanding
+  |--------------------------------------------------------------------------
+  */
+
   if (
-    value.includes("understood") ||
+    value === "got it" ||
+    value === "got_it" ||
+    value === "understood" ||
     value.includes("understand") ||
     value.includes("clear") ||
     value.includes("good") ||
-    value === "green"
+    value === "green" ||
+    value === "interesting"
   ) {
     return "understood";
   }
@@ -96,13 +138,51 @@ function normalizeSignal(
 
 /*
 |--------------------------------------------------------------------------
-| Topic extraction
+| Get round
+|--------------------------------------------------------------------------
+*/
+
+function getRound(
+  data: Record<string, unknown>
+): number {
+  const value =
+    data.round ??
+    data.roundNumber ??
+    data.pulseRound;
+
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0
+  ) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+
+    if (
+      Number.isInteger(parsed) &&
+      parsed > 0
+    ) {
+      return parsed;
+    }
+  }
+
+  return 0;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Get topic
 |--------------------------------------------------------------------------
 |
-| The existing signals collection may or may not contain a topic.
+| Existing signals primarily contain "round".
 |
-| We first look for common topic field names.
+| If a topic field exists, use it.
+| Otherwise use "Topic X".
 |
+|--------------------------------------------------------------------------
 */
 
 function getTopic(
@@ -113,6 +193,7 @@ function getTopic(
     data.topicName,
     data.title,
     data.subject,
+    data.roundTopic,
   ];
 
   for (const topic of possibleTopics) {
@@ -122,6 +203,12 @@ function getTopic(
     ) {
       return topic.trim();
     }
+  }
+
+  const round = getRound(data);
+
+  if (round > 0) {
+    return `Topic ${round}`;
   }
 
   return "General";
@@ -139,8 +226,12 @@ export function calculateLearningGaps(
   const topicMap: Record<
     string,
     {
+      round: number;
+
       confused: number;
+
       partial: number;
+
       understood: number;
     }
   > = {};
@@ -154,95 +245,128 @@ export function calculateLearningGaps(
       continue;
     }
 
+    const round = getRound(data);
+
     const topic = getTopic(data);
 
-    if (!topicMap[topic]) {
-      topicMap[topic] = {
+    const key =
+      round > 0
+        ? `round-${round}`
+        : topic;
+
+    if (!topicMap[key]) {
+      topicMap[key] = {
+        round,
+
         confused: 0,
+
         partial: 0,
+
         understood: 0,
       };
     }
 
-    topicMap[topic][signal]++;
+    topicMap[key][signal]++;
   }
 
-  const result: LearningGap[] = Object.entries(
-    topicMap
-  ).map(([topic, values]) => {
-    const totalResponses =
-      values.confused +
-      values.partial +
-      values.understood;
+  const result: LearningGap[] =
+    Object.entries(topicMap).map(
+      ([key, values]) => {
+        const totalResponses =
+          values.confused +
+          values.partial +
+          values.understood;
 
-    const confusionPercentage =
-      totalResponses === 0
-        ? 0
-        : Math.round(
-            (values.confused /
-              totalResponses) *
-              100
-          );
+        const confusionPercentage =
+          totalResponses === 0
+            ? 0
+            : Math.round(
+                (values.confused /
+                  totalResponses) *
+                  100
+              );
 
-    const partialPercentage =
-      totalResponses === 0
-        ? 0
-        : Math.round(
-            (values.partial /
-              totalResponses) *
-              100
-          );
+        const partialPercentage =
+          totalResponses === 0
+            ? 0
+            : Math.round(
+                (values.partial /
+                  totalResponses) *
+                  100
+              );
 
-    const understandingPercentage =
-      totalResponses === 0
-        ? 0
-        : Math.round(
-            (values.understood /
-              totalResponses) *
-              100
-          );
+        const understandingPercentage =
+          totalResponses === 0
+            ? 0
+            : Math.round(
+                (values.understood /
+                  totalResponses) *
+                  100
+              );
 
-    let level: LearningLevel =
-      "strong";
+        let level: LearningLevel =
+          "strong";
 
-    if (confusionPercentage >= 50) {
-      level = "critical";
-    } else if (confusionPercentage >= 25) {
-      level = "moderate";
-    }
+        if (
+          confusionPercentage >= 50
+        ) {
+          level = "critical";
+        } else if (
+          confusionPercentage >= 25
+        ) {
+          level = "moderate";
+        }
 
-    return {
-      topic,
+        return {
+          topic:
+            key.startsWith("round-")
+              ? `Topic ${values.round}`
+              : key,
 
-      totalResponses,
+          round: values.round,
 
-      confusedCount: values.confused,
+          totalResponses,
 
-      partialCount: values.partial,
+          confusedCount:
+            values.confused,
 
-      understoodCount:
-        values.understood,
+          partialCount:
+            values.partial,
 
-      confusionPercentage,
+          understoodCount:
+            values.understood,
 
-      partialPercentage,
+          confusionPercentage,
 
-      understandingPercentage,
+          partialPercentage,
 
-      level,
-    };
-  });
+          understandingPercentage,
+
+          level,
+        };
+      }
+    );
 
   /*
   |--------------------------------------------------------------------------
-  | Most problematic topics first
+  | Sort by round first
   |--------------------------------------------------------------------------
   */
 
   result.sort(
-    (a, b) =>
-      b.confusionPercentage -
-      a.confusionPercentage
+    (a, b) => {
+      if (
+        a.round > 0 &&
+        b.round > 0
+      ) {
+        return a.round - b.round;
+      }
+
+      return (
+        b.confusionPercentage -
+        a.confusionPercentage
+      );
+    }
   );
 
   return result;
@@ -252,6 +376,17 @@ export function calculateLearningGaps(
 |--------------------------------------------------------------------------
 | Subscribe to learning gaps
 |--------------------------------------------------------------------------
+|
+| IMPORTANT:
+| Firestore onSnapshot automatically fires whenever:
+|
+| - a signal is added
+| - a signal changes
+| - a signal is removed
+|
+| Therefore the UI updates in real time.
+|
+|--------------------------------------------------------------------------
 */
 
 export function subscribeToLearningGaps(
@@ -259,30 +394,25 @@ export function subscribeToLearningGaps(
   callback: (
     gaps: LearningGap[]
   ) => void,
-  onError?: (error: Error) => void
+  onError?: (
+    error: Error
+  ) => void
 ): () => void {
-  if (!sessionId) {
+  const cleanSessionId =
+    sessionId.trim();
+
+  if (!cleanSessionId) {
     callback([]);
 
     return () => {};
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | IMPORTANT
-  |--------------------------------------------------------------------------
-  |
-  | Only one Firestore where condition is used.
-  | This avoids requiring a composite index.
-  |
-  */
 
   const signalsQuery = query(
     collection(db, "signals"),
     where(
       "sessionId",
       "==",
-      sessionId
+      cleanSessionId
     )
   );
 
