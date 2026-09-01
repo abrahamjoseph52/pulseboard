@@ -12,6 +12,7 @@ import {
 import {
   useMemo,
   useState,
+  useEffect,
   type ReactNode,
 } from "react"
 
@@ -25,9 +26,9 @@ import SessionStatus from "@/app/components/student/SessionStatus"
 import Card from "@/app/components/ui/Card"
 import Loading from "@/app/components/ui/Loading"
 import ThemeToggle from "@/app/components/ThemeToggle"
-import AnonymousQuestionBox from "@/app/components/student/AnonymousQuestionBox";
+import AnonymousQuestionBox from "@/app/components/student/AnonymousQuestionBox"
 
-import { auth } from "@/lib/firebase"
+import { auth, db } from "@/lib/firebase"
 
 import {
   useSession,
@@ -38,15 +39,21 @@ import {
 } from "@/app/services/feedback.service"
 
 import type {
+  Signal,
   SignalType,
 } from "@/lib/types"
 
-export default function StudentSessionPage() {
-  const params =
-    useParams()
+import {
+  collection,
+  onSnapshot,
+  query,
+  where,
+} from "firebase/firestore"
 
-  const router =
-    useRouter()
+
+export default function StudentSessionPage() {
+  const params = useParams()
+  const router = useRouter()
 
   const sessionId =
     Array.isArray(params.id)
@@ -55,28 +62,326 @@ export default function StudentSessionPage() {
 
   const {
     session,
-    loading:
-      sessionLoading,
-    error:
-      sessionError,
+    loading: sessionLoading,
+    error: sessionError,
   } = useSession(
-    typeof sessionId ===
-      "string"
+    typeof sessionId === "string"
       ? sessionId
       : undefined
   )
+
+
   /*
-   * Read the current round directly from Firestore-backed session state.
+   * =========================================================
+   * CURRENT ROUND
+   * =========================================================
    */
+
   const currentRound =
     session?.currentRound ?? 0
 
+
   /*
-   * Store the selected signal together with
-   * the round in which it was selected.
+   * =========================================================
+   * FIRESTORE-BACKED STUDENT RESPONSE
+   * =========================================================
    *
-   * This avoids using useEffect just to reset state.
+   * Firestore is the permanent source of truth.
+   *
+   * Student submits Topic 1
+   *        ↓
+   * Firestore stores signal
+   *        ↓
+   * Student leaves page
+   *        ↓
+   * Student returns
+   *        ↓
+   * Firestore listener finds signal
+   *        ↓
+   * Topic 1 remains locked
+   *
+   * Topic 2 remains available.
    */
+
+  const [
+    firestoreSignals,
+    setFirestoreSignals,
+  ] = useState<Signal[]>([])
+
+  const [
+    signalsLoading,
+    setSignalsLoading,
+  ] = useState(true)
+
+  const [
+    signalLoadError,
+    setSignalLoadError,
+  ] = useState("")
+
+
+  /*
+   * =========================================================
+   * STUDENT AUTH STATE
+   * =========================================================
+   */
+
+  const currentUser =
+    auth.currentUser
+
+  const validSessionId =
+    typeof sessionId === "string" &&
+    sessionId.trim().length > 0
+
+  const feedbackUnavailable =
+    !validSessionId ||
+    !currentUser
+
+
+  /*
+   * =========================================================
+   * FIRESTORE SIGNAL LISTENER
+   * =========================================================
+   *
+   * IMPORTANT:
+   *
+   * We intentionally do NOT call setState directly in the
+   * effect body.
+   *
+   * React's set-state-in-effect ESLint rule complains about
+   * synchronous state updates inside the effect.
+   *
+   * All state updates below happen inside the Firestore
+   * subscription callback, which is exactly what the rule
+   * expects.
+   */
+
+  useEffect(() => {
+    if (
+      !validSessionId ||
+      !currentUser
+    ) {
+      return
+    }
+
+    const signalsCollection =
+      collection(
+        db,
+        "signals"
+      )
+
+    const studentSignalsQuery =
+      query(
+        signalsCollection,
+
+        where(
+          "sessionId",
+          "==",
+          sessionId.trim()
+        ),
+
+        where(
+          "studentId",
+          "==",
+          currentUser.uid
+        )
+      )
+
+    const unsubscribe =
+      onSnapshot(
+        studentSignalsQuery,
+
+        (snapshot) => {
+          const signals: Signal[] =
+            snapshot.docs.map(
+              (signalDocument) => {
+                const data =
+                  signalDocument.data()
+
+                /*
+                 * ---------------------------------------------
+                 * NORMALIZE ROUND
+                 * ---------------------------------------------
+                 */
+
+                const rawRound =
+                  data.round
+
+                let round = 0
+
+                if (
+                  typeof rawRound ===
+                    "number" &&
+                  Number.isInteger(
+                    rawRound
+                  )
+                ) {
+                  round =
+                    rawRound
+                } else if (
+                  typeof rawRound ===
+                    "string"
+                ) {
+                  const parsed =
+                    Number(
+                      rawRound
+                    )
+
+                  if (
+                    Number.isInteger(
+                      parsed
+                    )
+                  ) {
+                    round =
+                      parsed
+                  }
+                }
+
+                /*
+                 * ---------------------------------------------
+                 * VALID SIGNAL TYPES
+                 * ---------------------------------------------
+                 */
+
+                const rawSignal =
+                  data.signal
+
+                const validSignals: SignalType[] =
+                  [
+                    "got_it",
+                    "slightly_lost",
+                    "confused",
+                    "interesting",
+                  ]
+
+                const signal =
+                  validSignals.includes(
+                    rawSignal as SignalType
+                  )
+                    ? (
+                        rawSignal as SignalType
+                      )
+                    : "got_it"
+
+                /*
+                 * ---------------------------------------------
+                 * RETURN SIGNAL
+                 * ---------------------------------------------
+                 */
+
+                return {
+                  id:
+                    signalDocument.id,
+
+                  sessionId:
+                    typeof data.sessionId ===
+                      "string"
+                      ? data.sessionId
+                      : sessionId,
+
+                  studentId:
+                    typeof data.studentId ===
+                      "string"
+                      ? data.studentId
+                      : currentUser.uid,
+
+                  signal,
+
+                  round,
+
+                  timestamp:
+                    data.timestamp,
+                }
+              }
+            )
+
+          /*
+           * Firestore is now the source of truth.
+           */
+
+          setFirestoreSignals(
+            signals
+          )
+
+          setSignalsLoading(
+            false
+          )
+
+          setSignalLoadError(
+            ""
+          )
+        },
+
+        (error) => {
+          console.error(
+            "Failed to load student feedback:",
+            error
+          )
+
+          setSignalLoadError(
+            "Unable to check your previous feedback."
+          )
+
+          setFirestoreSignals(
+            []
+          )
+
+          setSignalsLoading(
+            false
+          )
+        }
+      )
+
+    return () => {
+      unsubscribe()
+    }
+  }, [
+    sessionId,
+    validSessionId,
+    currentUser,
+  ])
+
+
+  /*
+   * =========================================================
+   * FIND RESPONSE FOR CURRENT ROUND
+   * =========================================================
+   */
+
+  const existingSignalForCurrentRound =
+    useMemo(() => {
+      if (
+        currentRound <= 0
+      ) {
+        return null
+      }
+
+      const existingSignal =
+        firestoreSignals.find(
+          (signal) =>
+            signal.round ===
+            currentRound
+        )
+
+      return (
+        existingSignal?.signal ??
+        null
+      )
+    }, [
+      firestoreSignals,
+      currentRound,
+    ])
+
+
+  /*
+   * =========================================================
+   * LOCAL UI STATE
+   * =========================================================
+   *
+   * This provides immediate feedback after sending.
+   *
+   * Firestore remains the permanent source of truth.
+   */
+
   const [
     selectedSignalState,
     setSelectedSignalState,
@@ -86,18 +391,32 @@ export default function StudentSessionPage() {
       signal: SignalType
     } | null>(null)
 
+
   /*
-   * Only expose the selected signal if it belongs
-   * to the current teaching round.
+   * Prefer Firestore.
    *
-   * When the lecturer starts Round 2, a Round 1
-   * selection automatically becomes null.
+   * If Firestore has the response:
+   *     use Firestore.
+   *
+   * Otherwise:
+   *     use local state while the write is processing.
    */
+
   const selectedSignal =
-    selectedSignalState?.round ===
-    currentRound
-      ? selectedSignalState.signal
-      : null
+    existingSignalForCurrentRound ??
+    (
+      selectedSignalState?.round ===
+      currentRound
+        ? selectedSignalState.signal
+        : null
+    )
+
+
+  /*
+   * =========================================================
+   * SEND STATE
+   * =========================================================
+   */
 
   const [
     sending,
@@ -109,10 +428,13 @@ export default function StudentSessionPage() {
     setSendError,
   ] = useState("")
 
+
   /*
-   * The session is controlled by Firestore.
-   * There is no client-side timer.
+   * =========================================================
+   * SESSION STATE
+   * =========================================================
    */
+
   const effectiveSessionActive =
     Boolean(
       session &&
@@ -120,12 +442,10 @@ export default function StudentSessionPage() {
           "active"
     )
 
-  /*
-   * Current teaching topic.
-   */
   const roundTopic =
     session?.roundTopic ||
     ""
+
 
   /*
    * =========================================================
@@ -147,19 +467,30 @@ export default function StudentSessionPage() {
       }
 
       /*
-       * Prevent multiple selections
-       * within the same teaching round.
+       * Prevent another response for the
+       * same teaching topic.
        */
+
+      if (
+        existingSignalForCurrentRound
+      ) {
+        return
+      }
+
+      /*
+       * Protect against double-click.
+       */
+
       if (
         selectedSignal
       ) {
         return
       }
 
-      const currentUser =
+      const user =
         auth.currentUser
 
-      if (!currentUser) {
+      if (!user) {
         setSendError(
           "Please sign in again before sending feedback."
         )
@@ -175,9 +506,6 @@ export default function StudentSessionPage() {
         return
       }
 
-      /*
-       * A valid teaching pulse must exist.
-       */
       if (
         currentRound <= 0
       ) {
@@ -192,27 +520,33 @@ export default function StudentSessionPage() {
       setSendError("")
 
       try {
+        /*
+         * =====================================================
+         * SEND TO FIRESTORE
+         * =====================================================
+         */
+
         await sendSignal({
           sessionId:
-            String(sessionId),
+            String(
+              sessionId
+            ),
 
           studentId:
-            currentUser.uid,
+            user.uid,
 
           signal,
 
-          /*
-           * This connects the response
-           * to the exact teaching round.
-           */
           round:
             currentRound,
         })
 
         /*
-         * Lock this student's response
-         * to the current round.
+         * Immediate UI lock.
+         *
+         * Firestore listener will subsequently confirm it.
          */
+
         setSelectedSignalState({
           round:
             currentRound,
@@ -237,6 +571,7 @@ export default function StudentSessionPage() {
       }
     }
 
+
   /*
    * =========================================================
    * NAVIGATION
@@ -249,6 +584,7 @@ export default function StudentSessionPage() {
         "/student"
       )
     }
+
 
   /*
    * =========================================================
@@ -281,6 +617,13 @@ export default function StudentSessionPage() {
     effectiveSessionActive
       ? "active"
       : "ended"
+
+
+  /*
+   * =========================================================
+   * SESSION DESCRIPTION
+   * =========================================================
+   */
 
   const sessionDescription =
     useMemo(() => {
@@ -321,6 +664,7 @@ export default function StudentSessionPage() {
       roundTopic,
     ])
 
+
   /*
    * =========================================================
    * LOADING
@@ -338,6 +682,7 @@ export default function StudentSessionPage() {
     )
   }
 
+
   /*
    * =========================================================
    * SESSION ERROR
@@ -351,12 +696,14 @@ export default function StudentSessionPage() {
     return (
       <main className="app-shell flex min-h-screen items-center justify-center px-5">
         <div className="surface relative w-full max-w-md overflow-hidden rounded-[2rem] p-8 text-center">
+
           <div
             aria-hidden="true"
             className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-rose-500/10 blur-3xl"
           />
 
           <div className="relative z-10">
+
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl border border-rose-400/10 bg-rose-500/10 text-rose-300">
               <Radio className="h-7 w-7" />
             </div>
@@ -383,11 +730,13 @@ export default function StudentSessionPage() {
               <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
               Back to dashboard
             </button>
+
           </div>
         </div>
       </main>
     )
   }
+
 
   /*
    * =========================================================
@@ -397,6 +746,7 @@ export default function StudentSessionPage() {
 
   return (
     <main className="app-shell min-h-screen">
+
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
 
         {/* =====================================================
@@ -404,6 +754,7 @@ export default function StudentSessionPage() {
         ===================================================== */}
 
         <header className="flex items-center justify-between gap-3">
+
           <button
             type="button"
             onClick={
@@ -416,6 +767,7 @@ export default function StudentSessionPage() {
           </button>
 
           <div className="flex items-center gap-2">
+
             <span
               className={[
                 "hidden items-center gap-2 rounded-full px-3 py-1.5 text-[9px] font-black uppercase tracking-wider sm:flex",
@@ -424,6 +776,7 @@ export default function StudentSessionPage() {
                   : "bg-(--background-soft) text-(--foreground-muted)",
               ].join(" ")}
             >
+
               <span
                 className={[
                   "h-1.5 w-1.5 rounded-full",
@@ -434,17 +787,22 @@ export default function StudentSessionPage() {
               />
 
               {statusText}
+
             </span>
 
             <ThemeToggle />
+
           </div>
+
         </header>
+
 
         {/* =====================================================
             HERO
         ===================================================== */}
 
         <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-violet-400/10 bg-linear-to-br from-violet-600/[0.14] via-(--surface) to-indigo-600/[0.10] p-6 shadow-(--shadow-lg) sm:p-8">
+
           <div
             aria-hidden="true"
             className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-violet-500/15 blur-3xl"
@@ -456,9 +814,11 @@ export default function StudentSessionPage() {
           />
 
           <div className="relative flex flex-col gap-7 lg:flex-row lg:items-center lg:justify-between">
+
             <div className="min-w-0 flex-1">
 
               <div className="flex flex-wrap items-center gap-2">
+
                 <span
                   className={[
                     "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em]",
@@ -467,6 +827,7 @@ export default function StudentSessionPage() {
                       : "border-(--border) bg-(--background-soft) text-(--foreground-muted)",
                   ].join(" ")}
                 >
+
                   <span
                     className={[
                       "h-1.5 w-1.5 rounded-full",
@@ -479,6 +840,7 @@ export default function StudentSessionPage() {
                   {effectiveSessionActive
                     ? "Live classroom"
                     : "Session complete"}
+
                 </span>
 
                 <span className="rounded-full border border-violet-400/10 bg-violet-500/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-violet-300">
@@ -490,17 +852,22 @@ export default function StudentSessionPage() {
                     Round {currentRound}
                   </span>
                 )}
+
               </div>
+
 
               <h1 className="mt-5 max-w-4xl text-3xl font-black tracking-[-0.04em] sm:text-4xl lg:text-5xl">
                 {sessionTitle}
               </h1>
 
+
               <p className="mt-4 max-w-2xl text-sm leading-7 text-(--foreground-muted) sm:text-base">
                 {sessionDescription}
               </p>
 
+
               <div className="mt-6 flex flex-wrap gap-2">
+
                 <SessionChip
                   icon={
                     <Users className="h-3.5 w-3.5" />
@@ -525,10 +892,14 @@ export default function StudentSessionPage() {
                       : "Feedback closed"
                   }
                 />
+
               </div>
+
             </div>
 
+
             <div className="hidden lg:flex">
+
               <div className="relative flex h-48 w-48 items-center justify-center">
 
                 <div className="absolute inset-0 rounded-full border border-violet-400/10 bg-violet-500/5" />
@@ -540,7 +911,9 @@ export default function StudentSessionPage() {
                 </div>
 
                 <div className="absolute right-0 top-8 rounded-2xl border border-(--border) bg-(--surface)/90 px-3 py-2 shadow-(--shadow-md) backdrop-blur-xl">
+
                   <div className="flex items-center gap-2">
+
                     <span
                       className={[
                         "h-2 w-2 rounded-full",
@@ -562,28 +935,41 @@ export default function StudentSessionPage() {
                         ? "Respond now"
                         : "Completed"}
                     </span>
+
                   </div>
+
                 </div>
 
+
                 <div className="absolute bottom-4 left-0 rounded-2xl border border-(--border) bg-(--surface)/90 px-3 py-2 shadow-(--shadow-md) backdrop-blur-xl">
+
                   <div className="flex items-center gap-2">
+
                     <Sparkles className="h-3.5 w-3.5 text-violet-300" />
 
                     <span className="text-[9px] font-black uppercase tracking-wider text-(--foreground-muted)">
                       One-tap pulse
                     </span>
+
                   </div>
+
                 </div>
+
               </div>
+
             </div>
+
           </div>
+
         </section>
+
 
         {/* =====================================================
             SESSION STATUS
         ===================================================== */}
 
         <div className="mt-5">
+
           <SessionStatus
             title={
               sessionTitle
@@ -601,7 +987,9 @@ export default function StudentSessionPage() {
               participantCount
             }
           />
+
         </div>
+
 
         {/* =====================================================
             CURRENT TOPIC
@@ -611,13 +999,17 @@ export default function StudentSessionPage() {
           session.roundStatus ===
             "active" &&
           roundTopic && (
+
             <section className="mt-5 overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-r from-violet-500/10 via-(--surface) to-indigo-500/5 p-5 sm:p-6">
+
               <div className="flex items-center gap-4">
+
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
                   <Sparkles className="h-5 w-5" />
                 </div>
 
                 <div className="min-w-0">
+
                   <p className="text-[9px] font-black uppercase tracking-[0.2em] text-violet-400">
                     Current teaching topic
                   </p>
@@ -629,45 +1021,74 @@ export default function StudentSessionPage() {
                   <p className="mt-1 text-xs text-(--foreground-muted)">
                     Round {currentRound} is live. Submit your response below.
                   </p>
+
                 </div>
 
                 <div className="ml-auto hidden items-center gap-2 rounded-full bg-emerald-400/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-wider text-emerald-300 sm:flex">
+
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+
                   Live
+
                 </div>
+
               </div>
+
             </section>
+
           )}
+
+
         {/* =====================================================
             ANONYMOUS QUESTION BOX
         ===================================================== */}
 
         {effectiveSessionActive &&
-          session.roundStatus === "active" &&
+          session.roundStatus ===
+            "active" &&
           roundTopic &&
-          typeof sessionId === "string" && (
+          typeof sessionId ===
+            "string" && (
+
             <div className="mt-6">
+
               <AnonymousQuestionBox
-                sessionId={sessionId}
-                topic={roundTopic}
-                topicNumber={currentRound}
+                sessionId={
+                  sessionId
+                }
+                topic={
+                  roundTopic
+                }
+                topicNumber={
+                  currentRound
+                }
               />
+
             </div>
+
           )}
+
+
         {/* =====================================================
             MAIN CONTENT
         ===================================================== */}
 
         <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_350px]">
 
-          {/* Feedback */}
+          {/* ===================================================
+              FEEDBACK
+          =================================================== */}
+
           <section className="surface overflow-hidden rounded-[2rem]">
 
             <div className="border-b border-(--border) bg-linear-to-r from-violet-500/[0.04] to-transparent p-5 sm:p-7">
+
               <div className="flex items-start justify-between gap-4">
+
                 <div>
 
                   <div className="flex items-center gap-2">
+
                     <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
                       <Sparkles className="h-4 w-4" />
                     </span>
@@ -675,6 +1096,7 @@ export default function StudentSessionPage() {
                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-400">
                       Classroom pulse
                     </p>
+
                   </div>
 
                   <h2 className="mt-3 text-2xl font-black tracking-tight sm:text-3xl">
@@ -691,34 +1113,46 @@ export default function StudentSessionPage() {
                 <div className="hidden h-11 w-11 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300 sm:flex">
                   <Radio className="h-5 w-5" />
                 </div>
+
               </div>
+
             </div>
+
 
             <div className="p-5 sm:p-7">
 
               {effectiveSessionActive &&
               session.roundStatus ===
                 "active" ? (
+
                 <>
+
                   <FeedbackForm
-                    key={currentRound}
+                    key={
+                      currentRound
+                    }
                     onSend={
                       handleSendSignal
                     }
                     loading={
-                      sending
+                      sending ||
+                      signalsLoading
                     }
                     disabled={
                       !effectiveSessionActive ||
-                      currentRound <=
-                        0
+                      currentRound <= 0 ||
+                      Boolean(
+                        existingSignalForCurrentRound
+                      )
                     }
                     selectedSignal={
                       selectedSignal
                     }
                   />
 
+
                   {sendError && (
+
                     <div className="mt-5 flex items-start gap-3 rounded-2xl border border-rose-500/15 bg-rose-500/[0.06] px-4 py-3">
 
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-500/10 text-rose-300">
@@ -726,6 +1160,7 @@ export default function StudentSessionPage() {
                       </div>
 
                       <div>
+
                         <p className="text-xs font-black text-rose-300">
                           We couldn&apos;t send that pulse
                         </p>
@@ -733,12 +1168,42 @@ export default function StudentSessionPage() {
                         <p className="mt-1 text-[11px] leading-5 text-rose-300/80">
                           {sendError}
                         </p>
+
                       </div>
+
                     </div>
+
                   )}
+
+
+                  {signalLoadError && (
+
+                    <div className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/[0.06] px-4 py-3">
+
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-300">
+                        <Radio className="h-4 w-4" />
+                      </div>
+
+                      <div>
+
+                        <p className="text-xs font-black text-amber-300">
+                          Feedback status unavailable
+                        </p>
+
+                        <p className="mt-1 text-[11px] leading-5 text-amber-300/80">
+                          {signalLoadError}
+                        </p>
+
+                      </div>
+
+                    </div>
+
+                  )}
+
 
                   {selectedSignal &&
                     !sending && (
+
                       <div className="relative mt-5 overflow-hidden rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.045] p-4">
 
                         <div
@@ -753,6 +1218,7 @@ export default function StudentSessionPage() {
                           </div>
 
                           <div>
+
                             <p className="text-sm font-black text-emerald-200">
                               Pulse received
                             </p>
@@ -761,13 +1227,19 @@ export default function StudentSessionPage() {
                               Your response is now visible to your
                               faculty in the live classroom dashboard.
                             </p>
+
                           </div>
 
                         </div>
+
                       </div>
+
                     )}
+
                 </>
+
               ) : (
+
                 <PulseComplete
                   selectedSignal={
                     selectedSignal
@@ -782,21 +1254,27 @@ export default function StudentSessionPage() {
                       : "The lecturer has not started a teaching pulse yet."
                   }
                 />
+
               )}
 
             </div>
+
           </section>
 
-          {/* Sidebar */}
+
+          {/* ===================================================
+              SIDEBAR
+          =================================================== */}
+
           <aside className="space-y-5">
 
-            {/* Current classroom state */}
             <Card
               padding="none"
               glow={
                 effectiveSessionActive
               }
             >
+
               <div className="p-5">
 
                 <div className="flex items-center justify-between gap-3">
@@ -808,6 +1286,7 @@ export default function StudentSessionPage() {
                     </div>
 
                     <div>
+
                       <p className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-400">
                         Classroom state
                       </p>
@@ -815,9 +1294,11 @@ export default function StudentSessionPage() {
                       <p className="mt-1 text-xs font-bold text-(--foreground-secondary)">
                         Live faculty control
                       </p>
+
                     </div>
 
                   </div>
+
 
                   <span
                     className={[
@@ -833,6 +1314,7 @@ export default function StudentSessionPage() {
                   </span>
 
                 </div>
+
 
                 <div className="mt-5 rounded-2xl border border-(--border) bg-(--background-soft) p-4">
 
@@ -854,16 +1336,19 @@ export default function StudentSessionPage() {
 
                 </div>
 
+
                 <div className="mt-3 flex items-center gap-2 text-[10px] text-(--foreground-subtle)">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400" />
                   No countdown — your lecturer controls the pulse.
                 </div>
 
               </div>
+
             </Card>
 
-            {/* How it works */}
+
             <Card>
+
               <div className="flex items-center gap-3">
 
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-300">
@@ -871,6 +1356,7 @@ export default function StudentSessionPage() {
                 </div>
 
                 <div>
+
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-300">
                     Quick guide
                   </p>
@@ -878,9 +1364,11 @@ export default function StudentSessionPage() {
                   <h2 className="mt-1 text-base font-black">
                     How it works
                   </h2>
+
                 </div>
 
               </div>
+
 
               <div className="mt-5 space-y-4">
 
@@ -903,9 +1391,10 @@ export default function StudentSessionPage() {
                 />
 
               </div>
+
             </Card>
 
-            {/* Trust card */}
+
             <div className="relative overflow-hidden rounded-[2rem] border border-violet-500/15 bg-linear-to-br from-violet-500/10 via-violet-500/[0.04] to-indigo-500/5 p-5">
 
               <div
@@ -943,10 +1432,13 @@ export default function StudentSessionPage() {
                 </div>
 
               </div>
+
             </div>
 
           </aside>
+
         </div>
+
 
         {/* =====================================================
             BOTTOM SESSION INFO
@@ -993,10 +1485,19 @@ export default function StudentSessionPage() {
           />
 
         </section>
+
       </div>
+
     </main>
   )
 }
+
+
+/*
+ * =========================================================
+ * SESSION CHIP
+ * =========================================================
+ */
 
 function SessionChip({
   icon,
@@ -1007,6 +1508,7 @@ function SessionChip({
 }) {
   return (
     <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-(--border) bg-(--background-soft)/75 px-3 py-1.5 text-[10px] font-bold text-(--foreground-secondary)">
+
       <span className="shrink-0 text-violet-300">
         {icon}
       </span>
@@ -1014,9 +1516,17 @@ function SessionChip({
       <span className="truncate">
         {label}
       </span>
+
     </span>
   )
 }
+
+
+/*
+ * =========================================================
+ * PULSE COMPLETE
+ * =========================================================
+ */
 
 function PulseComplete({
   selectedSignal,
@@ -1047,11 +1557,14 @@ function PulseComplete({
         />
 
         <CheckCircle2 className="relative h-9 w-9" />
+
       </div>
+
 
       <p className="mt-6 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">
         Classroom update
       </p>
+
 
       <h2 className="mt-2 text-2xl font-black">
         {selectedSignal
@@ -1059,28 +1572,47 @@ function PulseComplete({
           : "Waiting for the next pulse"}
       </h2>
 
+
       <p className="mt-3 max-w-md text-sm leading-7 text-(--foreground-muted)">
         {message}
       </p>
 
+
       {selectedSignal && (
+
         <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-emerald-400/15 bg-emerald-400/10 px-4 py-2 text-xs font-bold text-emerald-300">
+
           <CheckCircle2 className="h-4 w-4" />
+
           Your latest signal was recorded.
+
         </div>
+
       )}
+
 
       <button
         type="button"
         onClick={onBack}
         className="group mt-7 inline-flex h-11 items-center gap-2 rounded-2xl border border-(--border) bg-(--surface) px-5 text-xs font-black text-(--foreground-secondary) transition-all hover:-translate-y-0.5 hover:border-(--border-strong) hover:bg-(--surface-hover) hover:text-(--foreground)"
       >
+
         <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+
         Return to dashboard
+
       </button>
+
     </div>
   )
 }
+
+
+/*
+ * =========================================================
+ * STEP
+ * =========================================================
+ */
 
 function Step({
   number,
@@ -1099,6 +1631,7 @@ function Step({
       </span>
 
       <div className="min-w-0">
+
         <p className="text-sm font-black">
           {title}
         </p>
@@ -1106,11 +1639,19 @@ function Step({
         <p className="mt-1 text-xs leading-5 text-(--foreground-muted)">
           {text}
         </p>
+
       </div>
 
     </div>
   )
 }
+
+
+/*
+ * =========================================================
+ * MINI SESSION CARD
+ * =========================================================
+ */
 
 function MiniSessionCard({
   icon,
@@ -1139,6 +1680,7 @@ function MiniSessionCard({
 
   return (
     <div className="surface surface-hover rounded-3xl p-5">
+
       <div className="flex items-center gap-3">
 
         <div
@@ -1151,6 +1693,7 @@ function MiniSessionCard({
         </div>
 
         <div>
+
           <p className="text-[9px] font-black uppercase tracking-[0.16em] text-(--foreground-subtle)">
             {label}
           </p>
@@ -1158,9 +1701,11 @@ function MiniSessionCard({
           <p className="mt-1 text-base font-black">
             {value}
           </p>
+
         </div>
 
       </div>
+
     </div>
   )
 }
